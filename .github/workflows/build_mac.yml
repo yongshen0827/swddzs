@@ -12,42 +12,40 @@ jobs:
       - name: 设置 Python 3.9 (ARM64 基础环境)
         uses: actions/setup-python@v5
         with:
-          # 改回 arm64，使用系统自带或正常下载的 Python，避免 x64 的 dylib 报错
           python-version: '3.9'
           architecture: 'arm64' 
 
       - name: 安装依赖 (强制编译为 x86_64)
         run: |
-          # 关键：使用 arch -x86_64 强制后续命令以 Intel 模式运行
           arch -x86_64 pip install --upgrade pip
           arch -x86_64 pip install -r requirements.txt
 
-      - name: 预下载 OCR 模型 (x86_64 模式)
-        run: |
-          arch -x86_64 python -c "from paddleocr import PaddleOCR; ocr = PaddleOCR(use_angle_cls=True, lang='ch')" || true
-          arch -x86_64 python -c "import easyocr; reader = easyocr.Reader(['ch_sim', 'en'])" || true
-
       - name: 执行 PyInstaller 打包
         run: |
-          # 关键：全程使用 arch -x86_64 包裹命令
           arch -x86_64 pyinstaller build_mac.spec
-
-      - name: 验证架构 (调试用，确保生成的是 Intel 程序)
-        run: |
-          # 检查生成的可执行文件是否包含 x86_64 架构
-          lipo -info dist/商委订单审核助手服务端 || file dist/商委订单审核助手服务端
 
       - name: 构建 .app 容器
         run: |
+          # 创建 .app 结构
           mkdir -p "商委订单审核助手服务端.app/Contents/MacOS"
           mkdir -p "商委订单审核助手服务端.app/Contents/Resources"
           
-          # 复制文件 (注意路径，PyInstaller 默认生成在 dist/项目名/项目名)
-          # 如果报错 "Not a directory"，请检查 dist 目录下的实际结构
-          cp -r dist/商委订单审核助手服务端/* "商委订单审核助手服务端.app/Contents/Resources/" 2>/dev/null || true
+          # 关键修改：源目录现在是 商委订单审核助手服务端_dist
+          SOURCE_DIR="dist/商委订单审核助手服务端_dist"
           
-          # 移动主程序
-          mv "dist/商委订单审核助手服务端/商委订单审核助手服务端" "商委订单审核助手服务端.app/Contents/MacOS/"
+          # 检查源目录是否存在
+          if [ ! -d "$SOURCE_DIR" ]; then
+            echo "错误：找不到源目录 $SOURCE_DIR"
+            ls -la dist/
+            exit 1
+          fi
+
+          # 复制所有资源文件到 .app 的 Resources
+          cp -r "$SOURCE_DIR"/* "商委订单审核助手服务端.app/Contents/Resources/"
+          
+          # 移动主程序二进制文件到 MacOS
+          # 注意：二进制文件依然在 Resources 里被复制了一份，我们需要把它移到 MacOS 并作为入口
+          mv "商委订单审核助手服务端.app/Contents/Resources/商委订单审核助手服务端" "商委订单审核助手服务端.app/Contents/MacOS/"
           
           # 生成 Info.plist
           cat > "商委订单审核助手服务端.app/Contents/Info.plist" << 'EOF'
