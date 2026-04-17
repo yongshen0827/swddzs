@@ -1,10 +1,10 @@
-# ==========  PyInstaller 环境 Paddle 崩溃终极修复 ==========
+# ========== PyInstaller 环境 Paddle 崩溃终极修复 (修正版) ==========
 import sys
 import os
 
 def _fix_paddle_for_pyinstaller():
     if not getattr(sys, 'frozen', False):
-        return  # 非打包环境无需修复
+        return # 非打包环境无需修复
 
     base_path = sys._MEIPASS
 
@@ -12,48 +12,68 @@ def _fix_paddle_for_pyinstaller():
     paddle_libs = os.path.join(base_path, 'paddle', 'libs')
     if os.path.isdir(paddle_libs):
         os.environ['PADDLE_BINARY_DIR'] = paddle_libs
+        # 注意：DYLD_LIBRARY_PATH 在 macOS 10.11+ SIP 保护下可能对 Python 子进程无效，但这里保留作为兼容
         if 'DYLD_LIBRARY_PATH' in os.environ:
             os.environ['DYLD_LIBRARY_PATH'] = paddle_libs + ':' + os.environ['DYLD_LIBRARY_PATH']
         else:
             os.environ['DYLD_LIBRARY_PATH'] = paddle_libs
 
     # 2. 劫持 paddle.base.core 模块，替换掉会崩溃的 set_paddle_lib_path
-    #    使用 import hook 在模块被加载时立刻修改
-    import importlib
-    from unittest.mock import patch
-
+    # 使用 import hook 在模块被加载时立刻修改
     try:
         # 提前导入 core 并替换函数（如果此时 paddle 还没被完全导入）
-        # 这里采用更激进的方法：直接修改 sys.modules 中的对象
         import paddle.base.core as core_module
         core_module.set_paddle_lib_path = lambda: None
-    except Exception:
-        # 如果 paddle 尚未导入，我们使用 import hook 确保加载后立刻替换
-        class PaddleImportHook:
-            def find_spec(self, fullname, path, target=None):
-                if fullname == 'paddle.base.core':
+        print("✅ 成功预加载并修复 paddle.base.core")
+        return
+    except Exception as e:
+        print(f"ℹ️ 无法预加载 paddle.base.core: {e}，将使用 Import Hook")
+
+    # 如果预加载失败，使用 Import Hook
+    class PaddleImportHook:
+        def __init__(self):
+            self.enabled = True # 防止无限递归的开关
+
+        def find_spec(self, fullname, path, target=None):
+            if not self.enabled:
+                return None
+            if fullname == 'paddle.base.core':
+                # 关键修复：防止递归
+                # 临时禁用自己，防止 importlib.util.find_spec 触发自己
+                self.enabled = False
+                try:
                     spec = importlib.util.find_spec(fullname)
                     if spec:
+                        # 包装 loader
                         spec.loader = PaddleLoader(spec.loader)
                     return spec
-                return None
+                finally:
+                    self.enabled = True
+            return None
 
-        class PaddleLoader:
-            def __init__(self, original_loader):
-                self.original_loader = original_loader
+    class PaddleLoader:
+        def __init__(self, original_loader):
+            self.original_loader = original_loader
 
-            def create_module(self, spec):
-                return None
+        def create_module(self, spec):
+            # Defer to the original loader
+            return None
 
-            def exec_module(self, module):
-                self.original_loader.exec_module(module)
-                # 模块加载后立即替换函数
+        def exec_module(self, module):
+            # 先执行原始的加载逻辑
+            self.original_loader.exec_module(module)
+            # 加载完成后，替换掉有问题的函数
+            try:
                 module.set_paddle_lib_path = lambda: None
+                print("✅ 成功通过 Hook 修复 paddle.base.core")
+            except Exception as e:
+                print(f"❌ 修复 paddle.base.core 失败: {e}")
 
-        # 安装 hook
-        sys.meta_path.insert(0, PaddleImportHook())
+    # 安装 hook (放在最前面)
+    sys.meta_path.insert(0, PaddleImportHook())
 
 _fix_paddle_for_pyinstaller()
+# =============================================================
 # =============================================================
 
 # 以下是原有的导入和环境设置（保持不变）
