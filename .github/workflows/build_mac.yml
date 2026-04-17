@@ -1,4 +1,4 @@
-name: 打包 macOS 应用 (Intel 兼容版)
+name: 打包 macOS 应用 (Intel 兼容版 - 修复闪退)
 on:
   workflow_dispatch:
 
@@ -18,36 +18,52 @@ jobs:
       - name: 安装依赖 (强制编译为 x86_64)
         run: |
           arch -x86_64 pip install --upgrade pip
+          # 安装所有依赖
           arch -x86_64 pip install -r requirements.txt
+
+      - name: 预下载 OCR 模型 (确保模型文件存在)
+        run: |
+          # 尝试初始化 PaddleOCR 和 EasyOCR，触发模型下载
+          arch -x86_64 python -c "
+          try:
+            from paddleocr import PaddleOCR; 
+            ocr = PaddleOCR(use_angle_cls=True, lang='ch');
+          except: pass
+          try:
+            import easyocr; 
+            reader = easyocr.Reader(['ch_sim', 'en']);
+          except: pass
+          " || echo "模型下载可能失败，但继续打包"
 
       - name: 执行 PyInstaller 打包
         run: |
+          # 使用 arch 强制打包，并指定 spec 文件
           arch -x86_64 pyinstaller build_mac.spec
 
-      - name: 构建 .app 容器
+      - name: 构建标准的 .app 结构 (关键修复步骤)
         run: |
-          # 创建 .app 结构
+          # 1. 创建标准的 .app 目录结构
           mkdir -p "商委订单审核助手服务端.app/Contents/MacOS"
           mkdir -p "商委订单审核助手服务端.app/Contents/Resources"
           
-          # 关键修改：源目录现在是 商委订单审核助手服务端_dist
-          SOURCE_DIR="dist/商委订单审核助手服务端_dist"
+          # 2. 定义源目录 (根据 spec 中的 COLLECT name)
+          SOURCE_DIR="dist/app_contents_temp"
           
-          # 检查源目录是否存在
-          if [ ! -d "$SOURCE_DIR" ]; then
+          # 3. 将 PyInstaller 打包的所有资源文件复制到 .app/Resources
+          # 这一步至关重要，确保 .so 和 .dylib 在程序运行时能被找到
+          if [ -d "$SOURCE_DIR" ]; then
+            cp -r "$SOURCE_DIR"/* "商委订单审核助手服务端.app/Contents/Resources/"
+          else
             echo "错误：找不到源目录 $SOURCE_DIR"
             ls -la dist/
             exit 1
           fi
-
-          # 复制所有资源文件到 .app 的 Resources
-          cp -r "$SOURCE_DIR"/* "商委订单审核助手服务端.app/Contents/Resources/"
           
-          # 移动主程序二进制文件到 MacOS
-          # 注意：二进制文件依然在 Resources 里被复制了一份，我们需要把它移到 MacOS 并作为入口
+          # 4. 移动主执行文件到 MacOS 目录
+          # 注意：主程序在 Resources 里也有一份，我们需要把它移到 MacOS 并重命名为入口
           mv "商委订单审核助手服务端.app/Contents/Resources/商委订单审核助手服务端" "商委订单审核助手服务端.app/Contents/MacOS/"
           
-          # 生成 Info.plist
+          # 5. 生成 Info.plist (应用程序的身份证)
           cat > "商委订单审核助手服务端.app/Contents/Info.plist" << 'EOF'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -56,15 +72,20 @@ jobs:
             <key>CFBundleExecutable</key>
             <string>商委订单审核助手服务端</string>
             <key>CFBundleIdentifier</key>
-            <string>com.example.ocr</string>
+            <string>com.example.swddzs</string>
             <key>CFBundleName</key>
             <string>商委订单审核助手服务端</string>
             <key>CFBundleVersion</key>
             <string>1.0</string>
+            <key>CFBundleShortVersionString</key>
+            <string>1.0</string>
+            <key>NSHighResolutionCapable</key>
+            <true/>
           </dict>
           </plist>
           EOF
 
+          # 6. 打包成品
           mkdir -p dist_final
           mv 商委订单审核助手服务端.app dist_final/
 
