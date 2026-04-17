@@ -5,7 +5,7 @@ on:
 
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: macos-14   # 你之前改过的 arm64 环境
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
@@ -36,17 +36,17 @@ jobs:
           mkdir -p "商委订单审核助手服务端.app/Contents/Frameworks"
           mkdir -p "商委订单审核助手服务端.app/Contents/Resources"
           
-          # 移动主程序
-          cp dist/商委订单审核助手服务端/商委订单审核助手服务端 "商委订单审核助手服务端.app/Contents/MacOS/"
+          # 移动主程序（注意源路径是 dist/app_contents_temp/）
+          cp dist/app_contents_temp/商委订单审核助手服务端 "商委订单审核助手服务端.app/Contents/MacOS/"
           
           # 移动所有动态库 (.dylib)
-          find dist/商委订单审核助手服务端 -name "*.dylib" -exec cp {} "商委订单审核助手服务端.app/Contents/Frameworks/" \;
+          find dist/app_contents_temp -name "*.dylib" -exec cp {} "商委订单审核助手服务端.app/Contents/Frameworks/" \;
           
           # 移动所有 .so 文件
-          find dist/商委订单审核助手服务端 -name "*.so" -exec cp {} "商委订单审核助手服务端.app/Contents/Frameworks/" \;
+          find dist/app_contents_temp -name "*.so" -exec cp {} "商委订单审核助手服务端.app/Contents/Frameworks/" \;
           
           # 移动资源文件（Python 库等）
-          cp -r dist/商委订单审核助手服务端/* "商委订单审核助手服务端.app/Contents/Resources/" 2>/dev/null || true
+          cp -r dist/app_contents_temp/* "商委订单审核助手服务端.app/Contents/Resources/" 2>/dev/null || true
           
           # 清理 Resources 中已移动的文件，避免重复
           rm -rf "商委订单审核助手服务端.app/Contents/Resources/商委订单审核助手服务端" 2>/dev/null || true
@@ -81,7 +81,7 @@ jobs:
           </plist>
           EOF
           
-          # 将构建好的 .app 移动到 dist 目录供上传
+          # 将构建好的 .app 移动到 dist_final 目录供上传
           mkdir -p dist_final
           mv 商委订单审核助手服务端.app dist_final/
 
