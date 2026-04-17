@@ -1,31 +1,3 @@
-# ========== 修复 Paddle + PyInstaller 打包后的路径错误 ==========
-import os
-import sys
-
-def _patch_paddle_core():
-    """在导入 paddle 前，预先设置正确的库路径环境变量"""
-    if getattr(sys, 'frozen', False):
-        # 获取 PyInstaller 解压目录（_MEIPASS）
-        base_path = sys._MEIPASS
-        
-        # 1. 设置 PADDLE_BINARY_DIR 环境变量（如果 Paddle 使用它）
-        paddle_lib_dir = os.path.join(base_path, 'paddle', 'libs')
-        if os.path.isdir(paddle_lib_dir):
-            os.environ['PADDLE_BINARY_DIR'] = paddle_lib_dir
-            print(f"[修复] PADDLE_BINARY_DIR = {paddle_lib_dir}")
-        
-        # 2. 直接将 paddle.libs 目录添加到 PATH / DYLD_LIBRARY_PATH
-        #    （确保系统能找到 .dylib 文件）
-        lib_path = os.path.join(base_path, 'paddle', 'libs')
-        if os.path.isdir(lib_path):
-            if 'DYLD_LIBRARY_PATH' in os.environ:
-                os.environ['DYLD_LIBRARY_PATH'] = lib_path + ':' + os.environ['DYLD_LIBRARY_PATH']
-            else:
-                os.environ['DYLD_LIBRARY_PATH'] = lib_path
-            print(f"[修复] DYLD_LIBRARY_PATH 已追加: {lib_path}")
-
-_patch_paddle_core()
-
 import sys
 import os
 
