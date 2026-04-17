@@ -19,7 +19,22 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: 预下载 OCR 模型 (确保模型文件存在)
+      # ===== 关键修复：注释 Paddle 的路径设置函数 =====
+      - name: 修复 Paddle 源码 (防止 PyInstaller 环境崩溃)
+        run: |
+          python -c "
+          import paddle, os, inspect
+          core_file = os.path.join(os.path.dirname(inspect.getfile(paddle.base.core)), 'core.py')
+          with open(core_file, 'r') as f:
+              content = f.read()
+          # 将函数调用注释掉
+          content = content.replace('set_paddle_lib_path()', '# set_paddle_lib_path()  # patched for PyInstaller')
+          with open(core_file, 'w') as f:
+              f.write(content)
+          print('✅ 已注释 paddle.base.core.set_paddle_lib_path() 调用')
+          "
+
+      - name: 预下载 OCR 模型 (保留，便于打包进 .app)
         run: |
           python -c " 
           try:
@@ -83,9 +98,7 @@ jobs:
           name: macOS-ARM64-App
           path: dist_final/
 
-  # ============================================
-  # 以下是专门测试命令行程序的 Job
-  # ============================================
+  # ===== 测试 Job：验证程序在干净 macOS 中能否正常启动 =====
   test-on-clean-macos:
     name: 🧪 验证 Web 服务启动 (干净环境)
     runs-on: macos-14
@@ -115,19 +128,16 @@ jobs:
           echo "🚀 后台启动服务（等待就绪标志）..."
           echo "=========================================="
           
-          # 创建临时文件存放输出
           LOG_FILE=$(mktemp)
           
-          # 后台启动程序，将 stdout 和 stderr 重定向到日志文件
           "$EXECUTABLE" > "$LOG_FILE" 2>&1 &
           APP_PID=$!
           
           echo "服务进程 PID: $APP_PID"
           echo "等待服务启动并输出就绪信息..."
           
-          # 最多等待 60 秒，每秒检查一次日志是否包含 Uvicorn running
           READY=0
-          for i in {1..60}; do
+          for i in {1..90}; do   # 90秒超时，足够模型加载
             if grep -q "Uvicorn running on http://127.0.0.1:5678" "$LOG_FILE" 2>/dev/null; then
               READY=1
               echo "✅ 服务已就绪！"
@@ -136,15 +146,14 @@ jobs:
             sleep 1
           done
           
-          # 显示当前日志内容
           echo ""
           echo "=========================================="
-          echo "📋 服务启动日志 (前 50 行):"
+          echo "📋 服务启动日志 (前 80 行):"
           echo "=========================================="
-          head -50 "$LOG_FILE"
+          head -80 "$LOG_FILE"
           echo ""
           
-          # 无论是否就绪，都杀掉进程
+          # 杀死进程
           kill $APP_PID 2>/dev/null || true
           wait $APP_PID 2>/dev/null || true
           
@@ -152,7 +161,7 @@ jobs:
           echo "🔍 分析结果..."
           echo "=========================================="
           
-          # 检查日志中的错误特征
+          # 检查典型错误
           if grep -qi "Library not loaded" "$LOG_FILE"; then
             echo "❌❌❌ 检测到缺失动态库！"
             grep -i "Library not loaded" "$LOG_FILE" -A 2
@@ -181,12 +190,14 @@ jobs:
             echo "✅ 服务成功启动并输出就绪标志！"
             echo "✅ 依赖完整性验证通过，程序在干净 Mac 上可正常运行。"
           else
-            echo "⚠️  未在 60 秒内检测到 'Uvicorn running' 标志。"
+            echo "⚠️  未在 90 秒内检测到 'Uvicorn running' 标志。"
             echo "请检查上方日志，判断是加载缓慢还是启动失败。"
-            echo "如果日志中显示模型加载进度但未到就绪状态，可考虑延长等待时间。"
-            # 这种情况不视为失败，因为可能是模型加载太慢
+            # 如果日志中有 PaddleOCR/EasyOCR 字样，可能是加载慢，不视为失败
             if grep -q "PaddleOCR\|EasyOCR\|模型" "$LOG_FILE"; then
-              echo "⚠️  但日志中包含 OCR 模型相关输出，可能加载较慢，建议适当延长等待时间。"
+              echo "⚠️  日志中包含 OCR 模型相关输出，可能加载较慢，建议适当延长等待时间。"
+            else
+              echo "❌ 启动失败，请检查日志。"
+              exit 1
             fi
           fi
           
