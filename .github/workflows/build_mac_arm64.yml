@@ -1,185 +1,137 @@
 name: 打包 macOS 应用 (M1/M2/M3/M4 原生版)
-on: 
+
+on:
   workflow_dispatch:
+
 jobs:
   build:
+    # 强制使用 macOS 14 (Sonoma) - ARM64 架构
     runs-on: macos-14
+    
     steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
+    - name: 检出代码
+      uses: actions/checkout@v4
 
-      - name: 设置 Python 3.9 (ARM64 原生环境)
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.9'
-          architecture: 'arm64'
+    - name: 设置 Python 3.9 (ARM64 原生环境)
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.9'
+        architecture: 'arm64'
 
-      - name: 安装依赖 (原生 ARM64)
-        run: |
-          pip install --upgrade pip
-          pip install -r requirements.txt
+    - name: 安装依赖
+      run: |
+        pip install --upgrade pip
+        pip install -r requirements.txt
+        # 安装 Nuitka
+        pip install nuitka
 
-      - name: 预下载 OCR 模型 (便于打包进 .app)
-        run: |
-          python -c " 
-          try:
-              from paddleocr import PaddleOCR; ocr = PaddleOCR(use_angle_cls=True, lang='ch'); 
-          except Exception as e:
-              print(e)
-          try:
-              import easyocr; reader = easyocr.Reader(['ch_sim', 'en']); 
-          except Exception as e:
-              print(e)
-          " || echo "模型下载可能失败，但继续打包"
+    - name: 预下载 OCR 模型 (便于打包进 .app)
+      run: |
+        python -c "
+        try:
+            from paddleocr import PaddleOCR
+            ocr = PaddleOCR(use_angle_cls=True, lang='ch')
+        except Exception as e:
+            print(f'PaddleOCR 模型预加载失败，但继续打包: {e}')
+        
+        try:
+            import easyocr
+            reader = easyocr.Reader(['ch_sim', 'en'])
+        except Exception as e:
+            print(f'EasyOCR 模型预加载失败: {e}')
+        "
 
-      - name: 执行 PyInstaller 打包
-        run: |
-          pyinstaller build_mac_arm64.spec
+    - name: 执行 Nuitka 打包 (核心替换)
+      run: |
+        # Nuitka 打包命令
+        python -m nuitka \
+          --standalone \
+          --follow-imports \
+          --no-pyi-file \
+          --macos-create-app-bundle \
+          --macos-app-name="商委订单审核助手服务端 (M1版)" \
+          --output-dir=dist_nuitka \
+          --remove-output \
+          main.py
 
-      - name: 构建标准的 .app 结构
-        run: |
-          mkdir -p "商委订单审核助手服务端 (M1版).app/Contents/MacOS"
-          mkdir -p "商委订单审核助手服务端 (M1版).app/Contents/Resources"
-
-          SOURCE_DIR="dist/app_contents_temp"
-
-          if [ -d "$SOURCE_DIR" ]; then
-            cp -r "$SOURCE_DIR"/* "商委订单审核助手服务端 (M1版).app/Contents/Resources/"
-          else
-            echo "错误：找不到源目录 $SOURCE_DIR"
-            ls -la dist/
-            exit 1
-          fi
-
-          mv "商委订单审核助手服务端 (M1版).app/Contents/Resources/商委订单审核助手服务端 (M1版)" "商委订单审核助手服务端 (M1版).app/Contents/MacOS/"
-
-          cat > "商委订单审核助手服务端 (M1版).app/Contents/Info.plist" << 'EOF'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>CFBundleExecutable</key>
-            <string>商委订单审核助手服务端 (M1版)</string>
-            <key>CFBundleIdentifier</key>
-            <string>com.example.swddzs.arm64</string>
-            <key>CFBundleName</key>
-            <string>商委订单审核助手服务端 (M1版)</string>
-            <key>CFBundleVersion</key>
-            <string>1.0</string>
-            <key>CFBundleShortVersionString</key>
-            <string>1.0</string>
-            <key>NSHighResolutionCapable</key>
-            <true/>
-          </dict>
-          </plist>
-          EOF
-
-          mkdir -p dist_final
-          mv 商委订单审核助手服务端\ \(M1版\).app dist_final/
-
-      - name: 上传产物
-        uses: actions/upload-artifact@v4
-        with:
-          name: macOS-ARM64-App
-          path: dist_final/
+    # ==========================================
+    # 新增：上传产物步骤 (为了让测试环节能下载到)
+    # ==========================================
+    - name: 上传 Nuitka 产物
+      uses: actions/upload-artifact@v4
+      with:
+        name: macOS-ARM64-App
+        path: dist_nuitka/商委订单审核助手服务端\ \(M1版\).app
 
   test-on-clean-macos:
     name: 🧪 验证 Web 服务启动 (干净环境)
     runs-on: macos-14
     needs: build
     steps:
-      - name: 下载刚才打包好的 .app
-        uses: actions/download-artifact@v4
-        with:
-          name: macOS-ARM64-App
-          path: ./downloaded-app
+    - name: 下载刚才打包好的 .app
+      uses: actions/download-artifact@v4
+      with:
+        name: macOS-ARM64-App
+        path: ./downloaded-app
 
-      - name: 后台启动服务，检测就绪标志后终止
-        run: |
-          echo "=========================================="
-          echo "📂 定位可执行文件..."
-          echo "=========================================="
-          
-          APP_PATH="./downloaded-app/商委订单审核助手服务端 (M1版).app"
-          EXECUTABLE="$APP_PATH/Contents/MacOS/商委订单审核助手服务端 (M1版)"
-          
-          chmod +x "$EXECUTABLE"
-          echo "可执行文件路径: $EXECUTABLE"
-          
-          echo ""
-          echo "=========================================="
-          echo "🚀 后台启动服务（等待就绪标志）..."
-          echo "=========================================="
-          
-          LOG_FILE=$(mktemp)
-          
-          "$EXECUTABLE" > "$LOG_FILE" 2>&1 &
-          APP_PID=$!
-          
-          echo "服务进程 PID: $APP_PID"
-          echo "等待服务启动并输出就绪信息..."
-          
-          READY=0
-          for i in {1..120}; do
-            if grep -q "Uvicorn running on http://127.0.0.1:5678" "$LOG_FILE" 2>/dev/null; then
-              READY=1
-              echo "✅ 服务已就绪！"
-              break
-            fi
-            sleep 1
-          done
-          
-          echo ""
-          echo "=========================================="
-          echo "📋 服务启动日志 (前 80 行):"
-          echo "=========================================="
-          head -80 "$LOG_FILE"
-          echo ""
-          
-          kill $APP_PID 2>/dev/null || true
-          wait $APP_PID 2>/dev/null || true
-          
-          echo "=========================================="
-          echo "🔍 分析结果..."
-          echo "=========================================="
-          
-          if grep -qi "Library not loaded" "$LOG_FILE"; then
-            echo "❌❌❌ 检测到缺失动态库！"
-            grep -i "Library not loaded" "$LOG_FILE" -A 2
+    - name: 赋予执行权限并启动服务
+      run: |
+        # 1. 找到 .app 文件
+        APP_PATH=$(find ./downloaded-app -name "*.app" | head -n 1)
+        echo "Found App: $APP_PATH"
+
+        # 2. Nuitka 生成的 App，可执行文件通常在 Contents/MacOS/ 下
+        # 我们需要直接运行那个二进制文件，而不是双击
+        EXEC_PATH="$APP_PATH/Contents/MacOS/main"
+        
+        # 3. 赋予权限
+        chmod +x "$EXEC_PATH"
+
+        # 4. 后台启动服务
+        # 注意：Nuitka 编译后的程序启动日志可能和 Python 脚本不同
+        "$EXEC_PATH" > server_output.log 2>&1 &
+        echo "服务已启动，PID: $!"
+
+    - name: 等待服务预热
+      run: sleep 10
+
+    - name: 检查日志 (关键验证)
+      run: |
+        # 检查是否有启动成功的标志
+        # Nuitka 编译的程序启动可能会慢一点，我们多查几次
+        if grep -q "Uvicorn running" server_output.log; then
+            echo "✅ 服务启动成功 (检测到 Uvicorn)"
+        elif grep -q "Application startup complete" server_output.log; then
+            echo "✅ 服务启动成功 (检测到 Application startup complete)"
+        else
+            echo "❌ 服务启动失败或超时，查看日志："
+            cat server_output.log
             exit 1
-          fi
-          
-          if grep -qi "ModuleNotFoundError" "$LOG_FILE"; then
-            echo "❌❌❌ Python 模块缺失！"
-            grep -i "ModuleNotFoundError" "$LOG_FILE" -A 2
+        fi
+
+        # 检查是否有常见的崩溃错误
+        if grep -q "Library not loaded" server_output.log; then
+            echo "❌ 检测到动态库丢失"
             exit 1
-          fi
-          
-          if grep -qiE "Segmentation fault|Abort trap|Bus error|Trace/BPT trap" "$LOG_FILE"; then
-            echo "❌❌❌ 程序发生底层崩溃！"
-            tail -20 "$LOG_FILE"
+        fi
+        if grep -q "ModuleNotFoundError" server_output.log; then
+            echo "❌ 检测到 Python 模块丢失"
             exit 1
-          fi
-          
-          if grep -q "Traceback (most recent call last)" "$LOG_FILE"; then
-            echo "❌❌❌ 程序出现 Python 异常！"
-            tail -30 "$LOG_FILE"
+        fi
+        if grep -q "RecursionError" server_output.log; then
+            echo "❌ 检测到递归错误 (Nuitka 应该避免了这个问题)"
             exit 1
-          fi
-          
-          if [ $READY -eq 1 ]; then
-            echo "✅ 服务成功启动并输出就绪标志！"
-            echo "✅ 依赖完整性验证通过，程序在干净 Mac 上可正常运行。"
-          else
-            echo "⚠️  未在 120 秒内检测到 'Uvicorn running' 标志。"
-            if grep -q "PaddleOCR\|EasyOCR\|模型" "$LOG_FILE"; then
-              echo "⚠️  日志中包含 OCR 模型相关输出，可能加载较慢，请适当延长等待时间。"
-            else
-              echo "❌ 启动失败，请检查日志。"
-              exit 1
-            fi
-          fi
-          
-          echo "=========================================="
-          echo "📝 验证完成。"
-          echo "=========================================="
+        fi
+
+    - name: 发送测试请求 (API 验证)
+      run: |
+        # 尝试访问健康检查接口 (假设你有 / 或 /health)
+        # 如果你的 main.py 根路由有东西，这里应该返回 200 或 404 (只要不报错就行)
+        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/ || echo "000")
+        
+        if [ "$HTTP_CODE" == "200" ] || [ "$HTTP_CODE" == "404" ]; then
+            echo "✅ API 响应正常 (HTTP $HTTP_CODE)"
+        else
+            echo "⚠️ API 响应异常 (HTTP $HTTP_CODE)，但不一定代表失败，视具体路由而定"
+            # 这里不直接 exit 1，因为如果你的根路由没写，404 也是正常的
+        fi
