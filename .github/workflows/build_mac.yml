@@ -1,5 +1,4 @@
 name: 打包 macOS 应用 (Intel 交叉编译)
-
 on:
   workflow_dispatch:
 
@@ -10,13 +9,21 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 设置 Python 3.9.13
+      - name: 设置 Python 3.9.13 (x86_64)
         uses: actions/setup-python@v5
         with:
           python-version: '3.9.13'
+          # 强制使用 x86_64 架构的 Python
+          architecture: 'x64'
 
-      - name: 安装依赖 (强制使用 x86_64 模式)
+      - name: 安装依赖 (强制 x86_64 环境)
         run: |
+          # 设置环境变量以确保所有工具链使用 x86_64
+          export ARCHFLAGS="-arch x86_64"
+          export CFLAGS="-arch x86_64"
+          export LDFLAGS="-arch x86_64"
+          
+          # 强制使用 x86_64 模式安装 pip 和依赖
           arch -x86_64 pip install --upgrade pip
           arch -x86_64 pip install -r requirements.txt
 
@@ -27,52 +34,83 @@ jobs:
 
       - name: 执行 PyInstaller 打包 (x86_64 目标)
         run: |
+          # 关键：确保 PyInstaller 以 x86_64 模式运行，并指定 spec 文件
           arch -x86_64 pyinstaller build_mac.spec
+
+      - name: 检查构建输出 (调试/修复)
+        run: |
+          # 检查 dist 目录内容，确认是否生成了目录而非单文件
+          echo "检查 dist 目录内容..."
+          ls -la dist/
+          
+          # 检查目标文件是否存在
+          if [ ! -f "dist/商委订单审核助手服务端" ] && [ ! -d "dist/商委订单审核助手服务端" ]; then
+            echo "错误：PyInstaller 未生成预期的可执行文件。"
+            exit 1
+          fi
 
       - name: 手动构建完整的 .app 结构
         run: |
+          # 创建 .app 容器结构
           mkdir -p "商委订单审核助手服务端.app/Contents/MacOS"
           mkdir -p "商委订单审核助手服务端.app/Contents/Frameworks"
           mkdir -p "商委订单审核助手服务端.app/Contents/Resources"
           
-          cp dist/商委订单审核助手服务端/商委订单审核助手服务端 "商委订单审核助手服务端.app/Contents/MacOS/"
+          # 修正：处理 PyInstaller 可能生成的单文件或目录模式
+          # 情况 A：如果是目录（PyInstaller 默认 one-folder 模式）
+          if [ -d "dist/商委订单审核助手服务端" ]; then
+            echo "检测到目录模式，复制文件..."
+            # 复制主程序（假设主程序在目录内）
+            cp "dist/商委订单审核助手服务端/商委订单审核助手服务端" "商委订单审核助手服务端.app/Contents/MacOS/" || \
+            cp "dist/商委订单审核助手服务端/main" "商委订单审核助手服务端.app/Contents/MacOS/商委订单审核助手服务端" # 兼容不同命名
+            
+            # 复制动态库 (.dylib, .so)
+            find "dist/商委订单审核助手服务端" -name "*.dylib" -exec cp {} "商委订单审核助手服务端.app/Contents/Frameworks/" \;
+            find "dist/商委订单审核助手服务端" -name "*.so" -exec cp {} "商委订单审核助手服务端.app/Contents/Frameworks/" \;
+            
+            # 复制资源（排除主程序目录本身）
+            cp -r "dist/商委订单审核助手服务端"/* "商委订单审核助手服务端.app/Contents/Resources/" 2>/dev/null || true
+            rm -rf "商委订单审核助手服务端.app/Contents/Resources/商委订单审核助手服务端" 2>/dev/null || true
+            
+          # 情况 B：如果是单文件 (虽然你的 spec 看起来是 COLLECT 模式，但以防万一)
+          elif [ -f "dist/商委订单审核助手服务端" ]; then
+            echo "检测到单文件模式，直接复制..."
+            cp "dist/商委订单审核助手服务端" "商委订单审核助手服务端.app/Contents/MacOS/"
+          fi
           
-          find dist/商委订单审核助手服务端 -name "*.dylib" -exec cp {} "商委订单审核助手服务端.app/Contents/Frameworks/" \;
-          find dist/商委订单审核助手服务端 -name "*.so" -exec cp {} "商委订单审核助手服务端.app/Contents/Frameworks/" \;
-          
-          cp -r dist/商委订单审核助手服务端/* "商委订单审核助手服务端.app/Contents/Resources/" 2>/dev/null || true
-          
-          rm -rf "商委订单审核助手服务端.app/Contents/Resources/商委订单审核助手服务端" 2>/dev/null || true
+          # 清理资源目录中的库文件（防止重复）
           find "商委订单审核助手服务端.app/Contents/Resources" -name "*.dylib" -delete 2>/dev/null || true
           find "商委订单审核助手服务端.app/Contents/Resources" -name "*.so" -delete 2>/dev/null || true
-          
+
+          # 生成 Info.plist
           cat > "商委订单审核助手服务端.app/Contents/Info.plist" << 'EOF'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
           <dict>
-              <key>CFBundleExecutable</key>
-              <string>商委订单审核助手服务端</string>
-              <key>CFBundleIdentifier</key>
-              <string>com.ocr.verify</string>
-              <key>CFBundleName</key>
-              <string>商委订单审核助手服务端</string>
-              <key>CFBundleDisplayName</key>
-              <string>商委订单审核助手服务端</string>
-              <key>CFBundleVersion</key>
-              <string>1.1.2</string>
-              <key>CFBundleShortVersionString</key>
-              <string>1.1.2</string>
-              <key>NSPrincipalClass</key>
-              <string>NSApplication</string>
-              <key>NSHighResolutionCapable</key>
-              <true/>
-              <key>LSBackgroundOnly</key>
-              <false/>
+            <key>CFBundleExecutable</key>
+            <string>商委订单审核助手服务端</string>
+            <key>CFBundleIdentifier</key>
+            <string>com.ocr.verify</string>
+            <key>CFundleName</key>
+            <string>商委订单审核助手服务端</string>
+            <key>CFBundleDisplayName</key>
+            <string>商委订单审核助手服务端</string>
+            <key>CFBundleVersion</key>
+            <string>1.1.2</string>
+            <key>CFBundleShortVersionString</key>
+            <string>1.1.2</string>
+            <key>NSPrincipalClass</key>
+            <string>NSApplication</string>
+            <key>NSHighResolutionCapable</key>
+            <true/>
+            <key>LSBackgroundOnly</key>
+            <false/>
           </dict>
           </plist>
           EOF
-          
+
+          # 打包到最终目录
           mkdir -p dist_final
           mv 商委订单审核助手服务端.app dist_final/
 
