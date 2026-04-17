@@ -28,25 +28,16 @@ exe = EXE(
     pyz,
     a.scripts,
     a.binaries,
-    a.zipfiles,
     a.datas,
     [],
-    name='商委订单审核助手服务端',  # <--- 保持不变，这是程序名
+    name='商委订单审核助手服务端', # 打包出的二进制文件名
     debug=False,
-    bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    upx_exclude=[],
-    target_arch='x86_64', 
-    console=True, 
-    disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_name=None,
-    codesign_identity=None,
-    entitlements_file=None,
+    console=True,
+    target_arch='x86_64',
 )
 
-# 2. COLLECT 的名字：这是输出目录的名字 (修改这里！)
 coll = COLLECT(
     exe,
     a.binaries,
@@ -54,6 +45,5 @@ coll = COLLECT(
     a.datas,
     strip=False,
     upx=True,
-    upx_exclude=[],
-    name='app_contents_temp',  # <--- 修改这里！不要和 EXE name 一样
+    name='app_contents_temp', # 打包出的资源文件夹名 (关键!)
 )
