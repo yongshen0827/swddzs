@@ -55,5 +55,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='商委订单审核助手服务端_dist',  # <--- 修改这里！不要和 EXE name 一样
+    name='app_contents_temp',  # <--- 修改这里！不要和 EXE name 一样
 )
