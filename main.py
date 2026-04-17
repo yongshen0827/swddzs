@@ -1,71 +1,85 @@
-# ========== PyInstaller 打包环境 Paddle 修复 ==========
-import os
+# ==========  PyInstaller 环境 Paddle 崩溃终极修复 ==========
 import sys
+import os
 
-def _patch_paddle_for_pyinstaller():
-    """修复 PaddlePaddle 在 PyInstaller 打包后的路径探测错误"""
+def _fix_paddle_for_pyinstaller():
     if not getattr(sys, 'frozen', False):
-        return  # 非打包环境不执行
+        return  # 非打包环境无需修复
 
     base_path = sys._MEIPASS
 
-    # 1. 设置动态库搜索路径
+    # 1. 设置动态库搜索路径（确保 .dylib 能被找到）
     paddle_libs = os.path.join(base_path, 'paddle', 'libs')
-    os.environ['PADDLE_BINARY_DIR'] = paddle_libs
-    if 'DYLD_LIBRARY_PATH' in os.environ:
-        os.environ['DYLD_LIBRARY_PATH'] = paddle_libs + ':' + os.environ['DYLD_LIBRARY_PATH']
-    else:
-        os.environ['DYLD_LIBRARY_PATH'] = paddle_libs
+    if os.path.isdir(paddle_libs):
+        os.environ['PADDLE_BINARY_DIR'] = paddle_libs
+        if 'DYLD_LIBRARY_PATH' in os.environ:
+            os.environ['DYLD_LIBRARY_PATH'] = paddle_libs + ':' + os.environ['DYLD_LIBRARY_PATH']
+        else:
+            os.environ['DYLD_LIBRARY_PATH'] = paddle_libs
 
-    # 2. 关键：替换 set_paddle_lib_path 为空函数，避免其内部拼接路径出错
+    # 2. 劫持 paddle.base.core 模块，替换掉会崩溃的 set_paddle_lib_path
+    #    使用 import hook 在模块被加载时立刻修改
+    import importlib
+    from unittest.mock import patch
+
     try:
-        # 延迟导入，确保 Paddle 未被提前加载
-        import paddle.base.core as core
-        core.set_paddle_lib_path = lambda: None
+        # 提前导入 core 并替换函数（如果此时 paddle 还没被完全导入）
+        # 这里采用更激进的方法：直接修改 sys.modules 中的对象
+        import paddle.base.core as core_module
+        core_module.set_paddle_lib_path = lambda: None
     except Exception:
-        # 如果此时 paddle 尚未导入，则注册一个后置钩子
-        import atexit
-        def _late_patch():
-            try:
-                import paddle.base.core as core
-                core.set_paddle_lib_path = lambda: None
-            except:
-                pass
-        atexit.register(_late_patch)
+        # 如果 paddle 尚未导入，我们使用 import hook 确保加载后立刻替换
+        class PaddleImportHook:
+            def find_spec(self, fullname, path, target=None):
+                if fullname == 'paddle.base.core':
+                    spec = importlib.util.find_spec(fullname)
+                    if spec:
+                        spec.loader = PaddleLoader(spec.loader)
+                    return spec
+                return None
 
-_patch_paddle_for_pyinstaller()
-# ======================================================
+        class PaddleLoader:
+            def __init__(self, original_loader):
+                self.original_loader = original_loader
 
+            def create_module(self, spec):
+                return None
+
+            def exec_module(self, module):
+                self.original_loader.exec_module(module)
+                # 模块加载后立即替换函数
+                module.set_paddle_lib_path = lambda: None
+
+        # 安装 hook
+        sys.meta_path.insert(0, PaddleImportHook())
+
+_fix_paddle_for_pyinstaller()
+# =============================================================
+
+# 以下是原有的导入和环境设置（保持不变）
 import sys
 import os
 
-# 判断是否在 PyInstaller 打包后的环境中
 if getattr(sys, 'frozen', False):
-    # 当前程序所在目录（即 _MEIPASS 或 exe 所在目录）
     base_path = sys._MEIPASS if hasattr(sys, '_MEIPASS') else os.path.dirname(sys.executable)
 
-    # 设置 PaddleOCR 模型路径
     paddleocr_home = os.path.join(base_path, '.paddleocr')
     if os.path.exists(paddleocr_home):
         os.environ['PADDLEOCR_HOME'] = paddleocr_home
         print(f"PaddleOCR 模型路径设置为: {paddleocr_home}")
 
-    # 设置 EasyOCR 模型路径
     easyocr_home = os.path.join(base_path, '.EasyOCR')
     if os.path.exists(easyocr_home):
         os.environ['EASYOCR_MODULE_PATH'] = easyocr_home
         print(f"EasyOCR 模型路径设置为: {easyocr_home}")
 else:
-    # 开发环境，模型在用户目录
     os.environ['PADDLEOCR_HOME'] = os.path.expanduser('~/.paddleocr')
     os.environ['EASYOCR_MODULE_PATH'] = os.path.expanduser('~/.EasyOCR')
 
 # macOS 特定配置
 if sys.platform == 'darwin':
-    # 禁用 OneDNN（避免 PaddleOCR 内部错误）
     os.environ['FLAGS_use_mkldnn'] = '0'
-    # 设置 MPS 相关环境变量（如果有 M1/M2/M3）
-    os.environ['PADDLE_USE_MPS'] = '1'  # 启用 Metal Performance Shaders
+    os.environ['PADDLE_USE_MPS'] = '1'
 else:
     os.environ['FLAGS_use_mkldnn'] = '0'
 
@@ -77,13 +91,13 @@ import base64
 import uuid
 import time
 import traceback
-import difflib 
+import difflib
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 import cv2
 import numpy as np
 from PIL import Image
-import fitz  # PyMuPDF
+import fitz
 import pdfplumber
 
 from paddleocr import PaddleOCR
@@ -93,9 +107,10 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-# ========== 新增：读取备案价 ==========
 import openpyxl
 from openpyxl import load_workbook
+
+# ... 后续所有代码保持原样，不需要修改 ...
 
 app = FastAPI()
 app.add_middleware(
