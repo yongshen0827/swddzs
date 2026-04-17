@@ -1,11 +1,11 @@
-name: 打包 macOS 应用
+name: 打包 macOS 应用 (Universal2)
 
 on:
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: macos-14   # 你之前改过的 arm64 环境
+    runs-on: macos-14
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
@@ -18,42 +18,35 @@ jobs:
       - name: 安装依赖
         run: |
           pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install universalPip
+          upip install -r requirements.txt
 
       - name: 预下载 OCR 模型（可选，失败也不影响）
         run: |
           python -c "from paddleocr import PaddleOCR; ocr = PaddleOCR(use_angle_cls=True, lang='ch')" || true
           python -c "import easyocr; reader = easyocr.Reader(['ch_sim', 'en'])" || true
 
-      - name: 执行 PyInstaller 打包（生成 COLLECT 文件夹）
+      - name: 执行 PyInstaller 打包
         run: |
           pyinstaller build_mac.spec
 
       - name: 手动构建完整的 .app 结构
         run: |
-          # 创建 .app 目录结构
           mkdir -p "商委订单审核助手服务端.app/Contents/MacOS"
           mkdir -p "商委订单审核助手服务端.app/Contents/Frameworks"
           mkdir -p "商委订单审核助手服务端.app/Contents/Resources"
           
-          # 移动主程序（注意源路径是 dist/app_contents_temp/）
-          cp dist/app_contents_temp/商委订单审核助手服务端 "商委订单审核助手服务端.app/Contents/MacOS/"
+          cp dist/商委订单审核助手服务端/商委订单审核助手服务端 "商委订单审核助手服务端.app/Contents/MacOS/"
           
-          # 移动所有动态库 (.dylib)
-          find dist/app_contents_temp -name "*.dylib" -exec cp {} "商委订单审核助手服务端.app/Contents/Frameworks/" \;
+          find dist/商委订单审核助手服务端 -name "*.dylib" -exec cp {} "商委订单审核助手服务端.app/Contents/Frameworks/" \;
+          find dist/商委订单审核助手服务端 -name "*.so" -exec cp {} "商委订单审核助手服务端.app/Contents/Frameworks/" \;
           
-          # 移动所有 .so 文件
-          find dist/app_contents_temp -name "*.so" -exec cp {} "商委订单审核助手服务端.app/Contents/Frameworks/" \;
+          cp -r dist/商委订单审核助手服务端/* "商委订单审核助手服务端.app/Contents/Resources/" 2>/dev/null || true
           
-          # 移动资源文件（Python 库等）
-          cp -r dist/app_contents_temp/* "商委订单审核助手服务端.app/Contents/Resources/" 2>/dev/null || true
-          
-          # 清理 Resources 中已移动的文件，避免重复
           rm -rf "商委订单审核助手服务端.app/Contents/Resources/商委订单审核助手服务端" 2>/dev/null || true
           find "商委订单审核助手服务端.app/Contents/Resources" -name "*.dylib" -delete 2>/dev/null || true
           find "商委订单审核助手服务端.app/Contents/Resources" -name "*.so" -delete 2>/dev/null || true
           
-          # 创建 Info.plist
           cat > "商委订单审核助手服务端.app/Contents/Info.plist" << 'EOF'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -81,12 +74,11 @@ jobs:
           </plist>
           EOF
           
-          # 将构建好的 .app 移动到 dist_final 目录供上传
           mkdir -p dist_final
           mv 商委订单审核助手服务端.app dist_final/
 
       - name: 上传 .app 产物
         uses: actions/upload-artifact@v4
         with:
-          name: 商委订单审核助手-macOS
+          name: 商委订单审核助手-macOS-Universal
           path: dist_final/商委订单审核助手服务端.app
