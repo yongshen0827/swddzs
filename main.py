@@ -1,70 +1,71 @@
-# ========== PyInstaller 环境 Paddle 崩溃终极修复 (防递归版) ==========
+# ========== PyInstaller 环境 Paddle 崩溃终极修复 (最终补丁版) ==========
 import sys
 import os
 
 def _fix_paddle_for_pyinstaller():
+    # 1. 只有在打包环境下才执行
     if not getattr(sys, 'frozen', False):
-        return # 非打包环境无需修复
+        return
 
+    if not hasattr(sys, '_MEIPASS'):
+        return
+        
     base_path = sys._MEIPASS
-    
-    # 1. 设置动态库搜索路径
+
+    # 2. 设置动态库路径 (防止 dylib 找不到)
     paddle_libs = os.path.join(base_path, 'paddle', 'libs')
     if os.path.isdir(paddle_libs):
         os.environ['PADDLE_BINARY_DIR'] = paddle_libs
+        # MacOS 环境变量修复
         if 'DYLD_LIBRARY_PATH' in os.environ:
             os.environ['DYLD_LIBRARY_PATH'] = paddle_libs + ':' + os.environ['DYLD_LIBRARY_PATH']
         else:
             os.environ['DYLD_LIBRARY_PATH'] = paddle_libs
 
-    # 2. 劫持 paddle.base.core 模块
-    # 修复 1: 移除可能导致问题的 mock patch 导入
-    # 修复 2: 使用标志位防止递归
+    # 3. 【核心修复】：不再使用复杂的 Import Hook，改用直接打补丁
+    # 我们尝试直接导入 paddle.base.core，如果成功，直接覆盖掉那个会导致崩溃的函数
     try:
+        # 注意：这里可能会触发 paddle 的初始化，所以我们要快
         import paddle.base.core as core_module
+        
+        # 将 set_paddle_lib_path 替换为空函数
+        # 这个函数原本试图自动寻找库路径，但在 PyInstaller 环境下会找错或崩溃
         core_module.set_paddle_lib_path = lambda: None
-        print("✅ 成功预加载修复 paddle.base.core")
+        
+        print("✅ 成功直接修复 paddle.base.core")
         return
-    except Exception as e:
-        print(f"ℹ️ 预加载修复失败: {e}，将使用 Import Hook")
-
-    # 定义一个不触发钩子的 find_spec 函数
-    orig_find_spec = importlib.util.find_spec
-    
-    class PaddleImportHook:
-        def find_spec(self, fullname, path, target=None):
-            # 修复 3: 防止无限递归的核心逻辑
-            # 如果是找 paddle.base.core，我们才拦截；否则直接使用原始的 find_spec
-            if fullname != 'paddle.base.core':
+        
+    except ImportError as e:
+        print(f"⚠️ 无法直接导入 paddle.base.core: {e}")
+        print("⚠️ 尝试使用备用方案...")
+        
+        # 备用方案：如果上面失败了，我们才尝试使用最简化的 Hook
+        # 这里的逻辑是：只在导入 paddle.base.core 的那一瞬间介入
+        import importlib.util
+        
+        class SimplePaddleHook:
+            def find_spec(self, fullname, path, target=None):
+                # 只有完全匹配才拦截
+                if fullname == 'paddle.base.core':
+                    # 找到原始 spec
+                    spec = importlib.util.find_spec(fullname)
+                    if spec:
+                        # 包装 loader
+                        original_loader = spec.loader
+                        def patched_exec(module):
+                            original_loader.exec_module(module)
+                            # 执行后立即修复
+                            if hasattr(module, 'set_paddle_lib_path'):
+                                module.set_paddle_lib_path = lambda: None
+                                print("✅ Hook 模式修复成功")
+                        # 替换 exec_module
+                        spec.loader = type('PatchedLoader', (object,), {'exec_module': patched_exec})()
+                    return spec
                 return None
-                
-            # 使用原始的 find_spec 函数，绕过当前的钩子，防止递归
-            spec = orig_find_spec(fullname)
-            if spec:
-                spec.loader = PaddleLoader(spec.loader)
-            return spec
-
-    class PaddleLoader:
-        def __init__(self, original_loader):
-            self.original_loader = original_loader
-
-        def create_module(self, spec):
-            return None
-
-        def exec_module(self, module):
-            self.original_loader.exec_module(module)
-            # 修复 4: 确保只在目标模块上操作
-            if hasattr(module, 'set_paddle_lib_path'):
-                module.set_paddle_lib_path = lambda: None
-
-    # 安装 hook
-    sys.meta_path.insert(0, PaddleImportHook())
-
-# 在导入 importlib 之前先定义 orig_find_spec 的占位符，或者直接在这里导入
-import importlib
+        
+        sys.meta_path.insert(0, SimplePaddleHook())
 
 _fix_paddle_for_pyinstaller()
-# =============================================================
 # =============================================================
 # =============================================================
 
