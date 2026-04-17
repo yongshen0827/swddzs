@@ -119,7 +119,7 @@ exe = EXE(
     strip=False,
     upx=True,
     console=True,
-    target_arch=None,
+    target_arch='universal2',
     codesign_identity=None,
     entitlements_file=None,
 )
