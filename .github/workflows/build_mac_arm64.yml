@@ -17,24 +17,11 @@ jobs:
       - name: 安装依赖 (原生 ARM64)
         run: |
           pip install --upgrade pip
+          # 强制升级 paddlepaddle 到最新版（避免旧版已知兼容性问题）
+          pip install --upgrade paddlepaddle
           pip install -r requirements.txt
 
-      # ===== 关键修复：注释 Paddle 的路径设置函数 =====
-      - name: 修复 Paddle 源码 (防止 PyInstaller 环境崩溃)
-        run: |
-          python -c "
-          import paddle, os, inspect
-          core_file = os.path.join(os.path.dirname(inspect.getfile(paddle.base.core)), 'core.py')
-          with open(core_file, 'r') as f:
-              content = f.read()
-          # 将函数调用注释掉
-          content = content.replace('set_paddle_lib_path()', '# set_paddle_lib_path()  # patched for PyInstaller')
-          with open(core_file, 'w') as f:
-              f.write(content)
-          print('✅ 已注释 paddle.base.core.set_paddle_lib_path() 调用')
-          "
-
-      - name: 预下载 OCR 模型 (保留，便于打包进 .app)
+      - name: 预下载 OCR 模型 (便于打包进 .app)
         run: |
           python -c " 
           try:
@@ -98,7 +85,6 @@ jobs:
           name: macOS-ARM64-App
           path: dist_final/
 
-  # ===== 测试 Job：验证程序在干净 macOS 中能否正常启动 =====
   test-on-clean-macos:
     name: 🧪 验证 Web 服务启动 (干净环境)
     runs-on: macos-14
@@ -137,7 +123,7 @@ jobs:
           echo "等待服务启动并输出就绪信息..."
           
           READY=0
-          for i in {1..90}; do   # 90秒超时，足够模型加载
+          for i in {1..120}; do   # 延长至120秒，适应模型加载
             if grep -q "Uvicorn running on http://127.0.0.1:5678" "$LOG_FILE" 2>/dev/null; then
               READY=1
               echo "✅ 服务已就绪！"
@@ -153,7 +139,7 @@ jobs:
           head -80 "$LOG_FILE"
           echo ""
           
-          # 杀死进程
+          # 终止进程
           kill $APP_PID 2>/dev/null || true
           wait $APP_PID 2>/dev/null || true
           
@@ -161,7 +147,7 @@ jobs:
           echo "🔍 分析结果..."
           echo "=========================================="
           
-          # 检查典型错误
+          # 错误检查
           if grep -qi "Library not loaded" "$LOG_FILE"; then
             echo "❌❌❌ 检测到缺失动态库！"
             grep -i "Library not loaded" "$LOG_FILE" -A 2
@@ -190,11 +176,9 @@ jobs:
             echo "✅ 服务成功启动并输出就绪标志！"
             echo "✅ 依赖完整性验证通过，程序在干净 Mac 上可正常运行。"
           else
-            echo "⚠️  未在 90 秒内检测到 'Uvicorn running' 标志。"
-            echo "请检查上方日志，判断是加载缓慢还是启动失败。"
-            # 如果日志中有 PaddleOCR/EasyOCR 字样，可能是加载慢，不视为失败
+            echo "⚠️  未在 120 秒内检测到 'Uvicorn running' 标志。"
             if grep -q "PaddleOCR\|EasyOCR\|模型" "$LOG_FILE"; then
-              echo "⚠️  日志中包含 OCR 模型相关输出，可能加载较慢，建议适当延长等待时间。"
+              echo "⚠️  日志中包含 OCR 模型相关输出，可能加载较慢，请适当延长等待时间。"
             else
               echo "❌ 启动失败，请检查日志。"
               exit 1
