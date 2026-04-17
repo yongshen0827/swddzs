@@ -1,0 +1,38 @@
+name: 打包 macOS 应用
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-13
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Python 3.9.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9.13'
+
+      - name: 配置 pip 清华源
+        run: pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
+
+      - name: 安装依赖
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 预下载 OCR 模型（可选）
+        run: |
+          python -c "from paddleocr import PaddleOCR; ocr = PaddleOCR(use_angle_cls=True, lang='ch')" || true
+          python -c "import easyocr; reader = easyocr.Reader(['ch_sim', 'en'])" || true
+
+      - name: 执行打包
+        run: pyinstaller build_mac.spec
+
+      - name: 上传 .app 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: 商委订单审核助手-macOS
+          path: dist/商委订单审核助手服务端.app
