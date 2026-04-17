@@ -1,0 +1,95 @@
+name: 打包 macOS 应用 (M1/M2/M3/M4 原生版)
+on: 
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Python 3.9 (ARM64 原生环境)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+          # 注意：这里显式指定 arm64，或者不指定（默认即 arm64）
+          architecture: 'arm64' 
+
+      - name: 安装依赖 (原生 ARM64)
+        run: |
+          # 移除了 arch -x86_64，直接使用原生 pip
+          pip install --upgrade pip
+          # 安装所有依赖
+          pip install -r requirements.txt
+
+      - name: 预下载 OCR 模型 (确保模型文件存在)
+        run: |
+          # 尝试初始化 PaddleOCR 和 EasyOCR，触发模型下载
+          python -c " 
+          try:
+              from paddleocr import PaddleOCR; ocr = PaddleOCR(use_angle_cls=True, lang='ch'); 
+          except Exception as e:
+              print(e)
+          try:
+              import easyocr; reader = easyocr.Reader(['ch_sim', 'en']); 
+          except Exception as e:
+              print(e)
+          " || echo "模型下载可能失败，但继续打包"
+
+      - name: 执行 PyInstaller 打包
+        run: |
+          # 移除了 arch -x86_64，直接调用
+          pyinstaller build_mac_arm64.spec
+
+      - name: 构建标准的 .app 结构
+        run: |
+          # 1. 创建标准的 .app 目录结构
+          mkdir -p "商委订单审核助手服务端 (M1版).app/Contents/MacOS"
+          mkdir -p "商委订单审核助手服务端 (M1版).app/Contents/Resources"
+
+          # 2. 定义源目录 (根据 spec 中的 COLLECT name)
+          SOURCE_DIR="dist/app_contents_temp"
+
+          # 3. 将 PyInstaller 打包的所有资源文件复制到 .app/Resources
+          if [ -d "$SOURCE_DIR" ]; then
+            cp -r "$SOURCE_DIR"/* "商委订单审核助手服务端 (M1版).app/Contents/Resources/"
+          else
+            echo "错误：找不到源目录 $SOURCE_DIR"
+            ls -la dist/
+            exit 1
+          fi
+
+          # 4. 移动主执行文件到 MacOS 目录
+          mv "商委订单审核助手服务端 (M1版).app/Contents/Resources/商委订单审核助手服务端 (M1版)" "商委订单审核助手服务端 (M1版).app/Contents/MacOS/"
+
+          # 5. 生成 Info.plist
+          cat > "商委订单审核助手服务端 (M1版).app/Contents/Info.plist" << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleExecutable</key>
+            <string>商委订单审核助手服务端 (M1版)</string>
+            <key>CFBundleIdentifier</key>
+            <string>com.example.swddzs.arm64</string>
+            <key>CFBundleName</key>
+            <string>商委订单审核助手服务端 (M1版)</string>
+            <key>CFBundleVersion</key>
+            <string>1.0</string>
+            <key>CFBundleShortVersionString</key>
+            <string>1.0</string>
+            <key>NSHighResolutionCapable</key>
+            <true/>
+          </dict>
+          </plist>
+          EOF
+
+          # 6. 打包成品
+          mkdir -p dist_final
+          mv 商委订单审核助手服务端\ \(M1版\).app dist_final/
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: macOS-ARM64-App
+          path: dist_final/
