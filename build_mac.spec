@@ -4,6 +4,7 @@
 import sys
 import os
 import glob
+import shutil
 from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules
 
 sys.setrecursionlimit(10000)
@@ -123,12 +124,19 @@ exe = EXE(
     entitlements_file=None,
 )
 
-# ==================== 关键修改：使用 COLLECT 收集所有文件 ====================
+# ==================== 关键修改：清理旧冲突，安全命名 COLLECT ====================
+# 如果 dist 目录下存在与目标同名的文件，先删除它（防止冲突）
+target_collect_dir = os.path.join('dist', 'app_contents_temp')
+if os.path.isfile(target_collect_dir):
+    os.remove(target_collect_dir)
+elif os.path.isdir(target_collect_dir):
+    shutil.rmtree(target_collect_dir)
+
 coll = COLLECT(
     exe,
     a.binaries,
     a.datas,
     strip=False,
     upx=True,
-    name='商委订单审核助手服务端',   # 会生成 dist/商委订单审核助手服务端 文件夹
+    name='app_contents_temp',   # 使用临时名称，避免与最终 .app 混淆
 )
