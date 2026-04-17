@@ -1,4 +1,4 @@
-name: 打包 macOS 应用 (Universal2)
+name: 打包 macOS 应用 (Intel 交叉编译)
 
 on:
   workflow_dispatch:
@@ -15,19 +15,19 @@ jobs:
         with:
           python-version: '3.9.13'
 
-      - name: 安装依赖
+      - name: 安装依赖 (强制使用 x86_64 模式)
         run: |
-          pip install --upgrade pip
-          pip install -r requirements.txt
+          arch -x86_64 pip install --upgrade pip
+          arch -x86_64 pip install -r requirements.txt
 
-      - name: 预下载 OCR 模型（可选，失败也不影响）
+      - name: 预下载 OCR 模型（可选）
         run: |
-          python -c "from paddleocr import PaddleOCR; ocr = PaddleOCR(use_angle_cls=True, lang='ch')" || true
-          python -c "import easyocr; reader = easyocr.Reader(['ch_sim', 'en'])" || true
+          arch -x86_64 python -c "from paddleocr import PaddleOCR; ocr = PaddleOCR(use_angle_cls=True, lang='ch')" || true
+          arch -x86_64 python -c "import easyocr; reader = easyocr.Reader(['ch_sim', 'en'])" || true
 
-      - name: 执行 PyInstaller 打包
+      - name: 执行 PyInstaller 打包 (x86_64 目标)
         run: |
-          pyinstaller build_mac.spec
+          arch -x86_64 pyinstaller build_mac.spec
 
       - name: 手动构建完整的 .app 结构
         run: |
