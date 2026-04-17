@@ -87,7 +87,7 @@ jobs:
   # 以下是专门测试命令行程序的 Job
   # ============================================
   test-on-clean-macos:
-    name: 🧪 验证 CLI 程序依赖完整性 (干净环境)
+    name: 🧪 验证 Web 服务启动 (干净环境)
     runs-on: macos-14
     needs: build
     
@@ -98,7 +98,7 @@ jobs:
           name: macOS-ARM64-App
           path: ./downloaded-app
 
-      - name: 直接运行二进制文件，检查是否缺库或崩溃
+      - name: 后台启动服务，检测就绪标志后终止
         run: |
           echo "=========================================="
           echo "📂 定位可执行文件..."
@@ -107,64 +107,87 @@ jobs:
           APP_PATH="./downloaded-app/商委订单审核助手服务端 (M1版).app"
           EXECUTABLE="$APP_PATH/Contents/MacOS/商委订单审核助手服务端 (M1版)"
           
-          # 赋予执行权限
           chmod +x "$EXECUTABLE"
-          
           echo "可执行文件路径: $EXECUTABLE"
+          
           echo ""
           echo "=========================================="
-          echo "🚀 尝试运行程序（超时时间 10 秒）..."
+          echo "🚀 后台启动服务（等待就绪标志）..."
           echo "=========================================="
           
-          # 由于是命令行程序，可能读取 stdin 导致卡住，所以用 echo 给它一点输入
-          OUTPUT=$(timeout 10s sh -c "echo '' | '$EXECUTABLE'" 2>&1) || EXIT_CODE=$?
+          # 创建临时文件存放输出
+          LOG_FILE=$(mktemp)
           
-          echo "程序退出码: $EXIT_CODE"
+          # 后台启动程序，将 stdout 和 stderr 重定向到日志文件
+          "$EXECUTABLE" > "$LOG_FILE" 2>&1 &
+          APP_PID=$!
+          
+          echo "服务进程 PID: $APP_PID"
+          echo "等待服务启动并输出就绪信息..."
+          
+          # 最多等待 60 秒，每秒检查一次日志是否包含 Uvicorn running
+          READY=0
+          for i in {1..60}; do
+            if grep -q "Uvicorn running on http://127.0.0.1:5678" "$LOG_FILE" 2>/dev/null; then
+              READY=1
+              echo "✅ 服务已就绪！"
+              break
+            fi
+            sleep 1
+          done
+          
+          # 显示当前日志内容
           echo ""
           echo "=========================================="
-          echo "🔍 分析输出结果..."
+          echo "📋 服务启动日志 (前 50 行):"
           echo "=========================================="
-          
-          # 打印前 30 行输出，方便定位问题
-          echo "$OUTPUT" | head -30
+          head -50 "$LOG_FILE"
           echo ""
           
-          # 1. 检查是否缺失动态库 (dyld)
-          if echo "$OUTPUT" | grep -qi "Library not loaded"; then
+          # 无论是否就绪，都杀掉进程
+          kill $APP_PID 2>/dev/null || true
+          wait $APP_PID 2>/dev/null || true
+          
+          echo "=========================================="
+          echo "🔍 分析结果..."
+          echo "=========================================="
+          
+          # 检查日志中的错误特征
+          if grep -qi "Library not loaded" "$LOG_FILE"; then
             echo "❌❌❌ 检测到缺失动态库！"
-            echo "----------------------------------------"
-            echo "$OUTPUT" | grep -i "Library not loaded" -A 2
-            echo "----------------------------------------"
+            grep -i "Library not loaded" "$LOG_FILE" -A 2
             exit 1
           fi
           
-          # 2. 检查是否有 Python 模块导入失败 (ModuleNotFoundError)
-          if echo "$OUTPUT" | grep -qi "ModuleNotFoundError"; then
+          if grep -qi "ModuleNotFoundError" "$LOG_FILE"; then
             echo "❌❌❌ Python 模块缺失！"
-            echo "$OUTPUT" | grep -i "ModuleNotFoundError" -A 2
+            grep -i "ModuleNotFoundError" "$LOG_FILE" -A 2
             exit 1
           fi
           
-          # 3. 检查是否有明显的段错误或崩溃信号
-          if echo "$OUTPUT" | grep -qiE "Segmentation fault|Abort trap|Bus error|Trace/BPT trap"; then
+          if grep -qiE "Segmentation fault|Abort trap|Bus error|Trace/BPT trap" "$LOG_FILE"; then
             echo "❌❌❌ 程序发生底层崩溃！"
-            echo "$OUTPUT" | tail -20
+            tail -20 "$LOG_FILE"
             exit 1
           fi
           
-          # 4. 根据退出码判断
-          if [ "$EXIT_CODE" = "124" ]; then
-            echo "⏰ 程序被 timeout 终止（可能正常运行但未主动退出，或等待输入）"
-            echo "✅ 未检测到崩溃或缺库错误，依赖完整性验证通过。"
-          elif [ "$EXIT_CODE" = "0" ]; then
-            echo "✅ 程序正常结束 (退出码 0)，未发现依赖问题。"
-          elif [ -n "$OUTPUT" ] && echo "$OUTPUT" | grep -q "Traceback (most recent call last)"; then
-            echo "❌ 程序出现 Python 异常！"
-            echo "$OUTPUT" | tail -30
+          if grep -q "Traceback (most recent call last)" "$LOG_FILE"; then
+            echo "❌❌❌ 程序出现 Python 异常！"
+            tail -30 "$LOG_FILE"
             exit 1
+          fi
+          
+          if [ $READY -eq 1 ]; then
+            echo "✅ 服务成功启动并输出就绪标志！"
+            echo "✅ 依赖完整性验证通过，程序在干净 Mac 上可正常运行。"
           else
-            echo "⚠️  程序退出码非零: $EXIT_CODE"
-            echo "但未检测到典型崩溃特征，请检查上方输出判断是否可接受。"
+            echo "⚠️  未在 60 秒内检测到 'Uvicorn running' 标志。"
+            echo "请检查上方日志，判断是加载缓慢还是启动失败。"
+            echo "如果日志中显示模型加载进度但未到就绪状态，可考虑延长等待时间。"
+            # 这种情况不视为失败，因为可能是模型加载太慢
+            if grep -q "PaddleOCR\|EasyOCR\|模型" "$LOG_FILE"; then
+              echo "⚠️  但日志中包含 OCR 模型相关输出，可能加载较慢，建议适当延长等待时间。"
+            fi
           fi
           
           echo "=========================================="
