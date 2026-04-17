@@ -18,8 +18,7 @@ jobs:
       - name: 安装依赖
         run: |
           pip install --upgrade pip
-          pip install universalPip
-          upip install -r requirements.txt
+          pip install -r requirements.txt
 
       - name: 预下载 OCR 模型（可选，失败也不影响）
         run: |
@@ -80,5 +79,5 @@ jobs:
       - name: 上传 .app 产物
         uses: actions/upload-artifact@v4
         with:
-          name: 商委订单审核助手-macOS-Universal
+          name: 商委订单审核助手-macOS-Intel
           path: dist_final/商委订单审核助手服务端.app
