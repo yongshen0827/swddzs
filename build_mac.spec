@@ -8,7 +8,7 @@ from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, co
 
 sys.setrecursionlimit(10000)
 
-# ==================== 路径配置 (macOS) ====================
+# ==================== 路径配置 (macOS 适配) ====================
 venv_path = sys.prefix
 site_packages = os.path.join(venv_path, 'lib', f'python{sys.version_info.major}.{sys.version_info.minor}', 'site-packages')
 
@@ -16,77 +16,92 @@ user_home = os.path.expanduser('~')
 paddleocr_model_path = os.path.join(user_home, '.paddleocr')
 easyocr_model_path = os.path.join(user_home, '.EasyOCR')
 
-# ==================== 1. 核心包列表 ====================
+# ==================== 1. 需要完整打包的包列表 ====================
 packages_to_include = [
     'paddleocr', 'paddle', 'paddlepaddle', 'paddlex', 'easyocr',
-    'cv2', 'PIL', 'pillow', 'matplotlib', 'scipy', 'numpy', 'skimage',
-    'fitz', 'PyMuPDF', 'pdfplumber', 'pdfminer',
-    'requests', 'urllib3', 'certifi',
-    'yaml', 'pydantic', 'fastapi', 'uvicorn',
-    'torch', 'torchvision', 'torchaudio', 'Cython', 'openpyxl',
+    'cv2', 'opencv_contrib_python', 'opencv_python', 'PIL', 'pillow',
+    'matplotlib', 'scipy', 'numpy', 'scikit_image', 'skimage', 'imgaug', 'imageio',
+    'tifffile', 'lazy_loader',
+    'fitz', 'PyMuPDF', 'pdfplumber', 'pypdfium2', 'pdf2docx', 'pdfminer_six',
+    'lxml', 'cssselect', 'premailer', 'cssutils',
+    'requests', 'urllib3', 'idna', 'chardet', 'certifi',
+    'yaml', 'PyYAML', 'ujson', 'protobuf', 'pycryptodome', 'cryptography',
+    'pydantic', 'pydantic_core', 'annotated_types', 'typing_extensions',
+    'lmdb', 'pyclipper', 'shapely', 'pandas', 'openpyxl', 'et_xmlfile',
+    'fastapi', 'starlette', 'uvicorn', 'click',
+    'tqdm', 'fire', 'visualdl', 'psutil',
+    'torch', 'torchaudio', 'torchvision', 'networkx',
+    'huggingface_hub', 'filelock', 'fsspec', 'safetensors',
+    'Cython', 'openpyxl',
 ]
 
-# ==================== 2. 收集数据和二进制 ====================
-datas = []
-binaries = []
+packages_to_include = list(set(packages_to_include))
 
-# 自动收集 paddle 的动态库（关键！）
-try:
-    paddle_binaries = collect_dynamic_libs('paddle')
-    binaries.extend(paddle_binaries)
-    print(f"Collected {len(paddle_binaries)} paddle dynamic libs")
-except Exception as e:
-    print(f"Warning: Could not collect paddle dynamic libs: {e}")
+# ==================== 2. 收集数据 ====================
+manual_datas = []
+binaries_list = []
 
-# 自动收集 cv2 的动态库
-try:
-    binaries.extend(collect_dynamic_libs('cv2'))
-except:
-    pass
-
-# 自动收集 torch 的动态库
-try:
-    binaries.extend(collect_dynamic_libs('torch'))
-except:
-    pass
-
-# 收集数据文件
 for pkg in packages_to_include:
+    pkg_path = os.path.join(site_packages, pkg)
+    if os.path.exists(pkg_path) and os.path.isdir(pkg_path):
+        manual_datas.append((pkg_path, pkg))
+    else:
+        alt_pkg = pkg.replace('_', '-')
+        alt_path = os.path.join(site_packages, alt_pkg)
+        if os.path.exists(alt_path) and os.path.isdir(alt_path):
+            manual_datas.append((alt_path, alt_pkg))
+
+    dist_info_pattern = os.path.join(site_packages, pkg.replace('_', '-') + '-*.dist-info')
+    for di in glob.glob(dist_info_pattern):
+        if os.path.isdir(di):
+            manual_datas.append((di, os.path.basename(di)))
+
+# ==================== 3. 动态库 ====================
+for lib in ['paddle', 'cv2', 'fitz', 'torch', 'torchvision', 'PIL']:
     try:
-        datas.extend(collect_data_files(pkg))
+        libs = collect_dynamic_libs(lib)
+        filtered = [(src, dst) for src, dst in libs if not any(x in src for x in ['tkinter', 'Qt'])]
+        binaries_list.extend(filtered)
     except:
         pass
 
-# 模型文件（可选）
+# ==================== 4. Cython 数据 ====================
+manual_datas.extend(collect_data_files('Cython'))
+
+# ==================== 5. 模型文件（不强制打包，仅收集若存在） ====================
 if os.path.exists(paddleocr_model_path):
-    datas.append((paddleocr_model_path, '.paddleocr'))
+    manual_datas.append((paddleocr_model_path, '.paddleocr'))
 if os.path.exists(easyocr_model_path):
-    datas.append((easyocr_model_path, '.EasyOCR'))
+    manual_datas.append((easyocr_model_path, '.EasyOCR'))
 
-# ==================== 3. 隐藏导入 ====================
-hiddenimports = [
+# ==================== 6. 隐藏导入 ====================
+hidden_imports = [
     'paddleocr', 'paddle', 'paddlepaddle', 'paddlex', 'easyocr',
-    'cv2', 'PIL', 'fitz', 'pdfplumber', 'openpyxl',
-    'skimage', 'matplotlib', 'scipy', 'Cython',
-    'pydantic', 'fastapi', 'uvicorn', 'starlette',
+    'paddleocr.ppocr', 'paddleocr.ppocr.data', 'paddleocr.ppocr.postprocess',
+    'paddleocr.ppocr.utils', 'paddleocr.tools', 'paddleocr.tools.infer',
+    'extract_textpoint_slow', 'extract_textpoint_fast', 'extract_batchsize',
+    'easyocr.easyocr', 'easyocr.detection', 'easyocr.recognition',
+    'imgaug', 'imageio', 'skimage', 'matplotlib', 'PIL',
+    'scipy', 'networkx', 'packaging', 'pyclipper', 'lmdb', 'tqdm', 'shapely',
+    'fastapi', 'starlette', 'uvicorn', 'pydantic', 'Cython',
 ]
-for pkg in ['paddleocr', 'paddle', 'easyocr', 'skimage']:
+for pkg in ['paddleocr', 'paddle', 'easyocr', 'ppocr', 'imgaug', 'imageio', 'skimage', 'PIL']:
     try:
-        hiddenimports.extend(collect_submodules(pkg))
+        hidden_imports.extend(collect_submodules(pkg))
     except:
         pass
-hiddenimports = list(set(hiddenimports))
+hidden_imports = list(set(hidden_imports))
 
-# ==================== 4. Analysis ====================
+# ==================== 7. Analysis ====================
 a = Analysis(
     ['main.py'],
     pathex=[],
-    binaries=binaries,
-    datas=datas,
-    hiddenimports=hiddenimports,
-    hookspath=[],  # 不再使用自定义钩子目录
-    runtime_hooks=['fix_imports.py'],  # 保留你的运行时修复脚本
-    excludes=['tkinter', 'PyQt5', 'wx', 'IPython'],
+    binaries=binaries_list,
+    datas=manual_datas,
+    hiddenimports=hidden_imports,
+    hookspath=['.'],
+    runtime_hooks=['fix_imports.py'],
+    excludes=['tkinter', 'PyQt5', 'wx'],
     noarchive=False,
 )
 
@@ -105,17 +120,15 @@ exe = EXE(
     console=True,
     target_arch=None,
     codesign_identity=None,
+    entitlements_file=None,
 )
 
-app = BUNDLE(
+# ==================== 关键修改：使用 COLLECT 收集所有文件 ====================
+coll = COLLECT(
     exe,
-    name='商委订单审核助手服务端.app',
-    bundle_identifier='com.ocr.verify',
-    info_plist={
-        'NSPrincipalClass': 'NSApplication',
-        'NSHighResolutionCapable': True,
-        'CFBundleShortVersionString': '1.1.2',
-        'CFBundleVersion': '1.1.2',
-        'CFBundleExecutable': '商委订单审核助手服务端',
-    },
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=True,
+    name='商委订单审核助手服务端',   # 会生成 dist/商委订单审核助手服务端 文件夹
 )
