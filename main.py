@@ -1,3 +1,41 @@
+# ========== PyInstaller 打包环境 Paddle 修复 ==========
+import os
+import sys
+
+def _patch_paddle_for_pyinstaller():
+    """修复 PaddlePaddle 在 PyInstaller 打包后的路径探测错误"""
+    if not getattr(sys, 'frozen', False):
+        return  # 非打包环境不执行
+
+    base_path = sys._MEIPASS
+
+    # 1. 设置动态库搜索路径
+    paddle_libs = os.path.join(base_path, 'paddle', 'libs')
+    os.environ['PADDLE_BINARY_DIR'] = paddle_libs
+    if 'DYLD_LIBRARY_PATH' in os.environ:
+        os.environ['DYLD_LIBRARY_PATH'] = paddle_libs + ':' + os.environ['DYLD_LIBRARY_PATH']
+    else:
+        os.environ['DYLD_LIBRARY_PATH'] = paddle_libs
+
+    # 2. 关键：替换 set_paddle_lib_path 为空函数，避免其内部拼接路径出错
+    try:
+        # 延迟导入，确保 Paddle 未被提前加载
+        import paddle.base.core as core
+        core.set_paddle_lib_path = lambda: None
+    except Exception:
+        # 如果此时 paddle 尚未导入，则注册一个后置钩子
+        import atexit
+        def _late_patch():
+            try:
+                import paddle.base.core as core
+                core.set_paddle_lib_path = lambda: None
+            except:
+                pass
+        atexit.register(_late_patch)
+
+_patch_paddle_for_pyinstaller()
+# ======================================================
+
 import sys
 import os
 
