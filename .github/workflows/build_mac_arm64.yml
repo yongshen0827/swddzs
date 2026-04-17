@@ -87,52 +87,87 @@ jobs:
   # 以下是新加的测试 Job，模拟用户双击运行
   # ============================================
   test-on-clean-macos:
-    name: 🧪 模拟用户双击运行 (干净环境)
-    runs-on: macos-14            # 和打包时一样的 macOS 14 (M1 原生)
-    needs: build                 # 必须等上面的 build 任务跑完
+    name: 🧪 验证 CLI 程序依赖完整性 (干净环境)
+    runs-on: macos-14
+    needs: build
     
     steps:
       - name: 下载刚才打包好的 .app
         uses: actions/download-artifact@v4
         with:
-          name: macOS-ARM64-App   # 必须和上面 upload-artifact 的 name 完全一致
+          name: macOS-ARM64-App
           path: ./downloaded-app
 
-      - name: 尝试启动并监听崩溃日志
+      - name: 直接运行二进制文件，检查是否缺库或崩溃
         run: |
           echo "=========================================="
-          echo "📂 正在模拟用户双击打开 .app ..."
+          echo "📂 定位可执行文件..."
           echo "=========================================="
           
-          # 由于 app 名字带空格，需要用引号包起来
-          open "./downloaded-app/商委订单审核助手服务端 (M1版).app"
+          APP_PATH="./downloaded-app/商委订单审核助手服务端 (M1版).app"
+          EXECUTABLE="$APP_PATH/Contents/MacOS/商委订单审核助手服务端 (M1版)"
           
-          echo "⏳ 等待 15 秒，观察程序是否闪退..."
-          sleep 15
+          # 赋予执行权限
+          chmod +x "$EXECUTABLE"
           
+          echo "可执行文件路径: $EXECUTABLE"
+          echo ""
           echo "=========================================="
-          echo "🔍 检查系统崩溃日志 (最近 2 分钟内)..."
+          echo "🚀 尝试运行程序（超时时间 10 秒）..."
           echo "=========================================="
           
-          # 查询程序相关的系统日志，名字包含 "商委订单审核助手"
-          LOG_OUTPUT=$(log show --predicate 'processImagePath contains "商委订单审核助手"' --last 2m --style syslog 2>/dev/null || echo "")
+          # 由于是命令行程序，可能读取 stdin 导致卡住，所以用 yes 或 echo 给它一点输入
+          # 用 timeout 限制执行时间，防止死循环或等待输入
+          OUTPUT=$(timeout 10s sh -c "echo '' | '$EXECUTABLE'" 2>&1) || EXIT_CODE=$?
           
-          if [ -z "$LOG_OUTPUT" ]; then
-            echo "✅ 未捕获到任何相关系统日志。程序可能正常启动或静默运行。"
-            echo "⚠️  注意：如果程序有 GUI 窗口，它在 CI 环境中会瞬间启动然后退出（因为无显示器）。"
-            echo "⚠️  本次测试主要验证：程序启动时是否因缺少依赖库而崩溃。"
-          elif echo "$LOG_OUTPUT" | grep -qi "crash\|termination\|abort\|signal\|trace"; then
-            echo "❌❌❌ 检测到崩溃迹象！日志如下："
+          echo "程序退出码: $EXIT_CODE"
+          echo ""
+          echo "=========================================="
+          echo "🔍 分析输出结果..."
+          echo "=========================================="
+          
+          # 打印前 30 行输出，方便定位问题
+          echo "$OUTPUT" | head -30
+          echo ""
+          
+          # 1. 检查是否缺失动态库 (dyld)
+          if echo "$OUTPUT" | grep -qi "Library not loaded"; then
+            echo "❌❌❌ 检测到缺失动态库！"
             echo "----------------------------------------"
-            echo "$LOG_OUTPUT"
+            echo "$OUTPUT" | grep -i "Library not loaded" -A 2
             echo "----------------------------------------"
-            echo "请重点关注上面日志中 'Library not loaded' 或 'dyld' 相关的行。"
+            exit 1
+          fi
+          
+          # 2. 检查是否有 Python 模块导入失败 (ModuleNotFoundError)
+          if echo "$OUTPUT" | grep -qi "ModuleNotFoundError"; then
+            echo "❌❌❌ Python 模块缺失！"
+            echo "$OUTPUT" | grep -i "ModuleNotFoundError" -A 2
+            exit 1
+          fi
+          
+          # 3. 检查是否有明显的段错误或崩溃信号
+          if echo "$OUTPUT" | grep -qiE "Segmentation fault|Abort trap|Bus error|Trace/BPT trap"; then
+            echo "❌❌❌ 程序发生底层崩溃！"
+            echo "$OUTPUT" | tail -20
+            exit 1
+          fi
+          
+          # 4. 根据退出码判断
+          if [ "$EXIT_CODE" = "124" ]; then
+            echo "⏰ 程序被 timeout 终止（可能正常运行但未主动退出，或等待输入）"
+            echo "✅ 未检测到崩溃或缺库错误，依赖完整性验证通过。"
+          elif [ "$EXIT_CODE" = "0" ]; then
+            echo "✅ 程序正常结束 (退出码 0)，未发现依赖问题。"
+          elif [ -n "$OUTPUT" ] && echo "$OUTPUT" | grep -q "Traceback (most recent call last)"; then
+            echo "❌ 程序出现 Python 异常！"
+            echo "$OUTPUT" | tail -30
             exit 1
           else
-            echo "✅ 未发现明显崩溃关键词。日志内容如下（供参考）："
-            echo "$LOG_OUTPUT"
+            echo "⚠️  程序退出码非零: $EXIT_CODE"
+            echo "但未检测到典型崩溃特征，请检查上方输出判断是否可接受。"
           fi
           
           echo "=========================================="
-          echo "📝 测试完成。如果程序依赖 GUI 交互，建议在真实 Mac 上做最终验证。"
+          echo "📝 验证完成。"
           echo "=========================================="
