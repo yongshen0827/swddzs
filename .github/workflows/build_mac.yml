@@ -15,9 +15,6 @@ jobs:
         with:
           python-version: '3.9.13'
 
-      - name: 配置 pip 清华源
-        run: pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
-
       - name: 安装依赖
         run: |
           pip install --upgrade pip
