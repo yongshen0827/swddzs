@@ -85,7 +85,16 @@ hiddenimports = list(set(hiddenimports))
 
 # ==================== 2. 数据文件（模型） ====================
 datas = []
-
+# 收集 Cython 的 Utility 文件
+try:
+    import Cython.Utils
+    cython_utility_dir = os.path.join(os.path.dirname(Cython.__file__), 'Utility')
+    if os.path.exists(cython_utility_dir):
+        datas.append((cython_utility_dir, 'Cython/Utility'))
+        print(f"✅ 已添加 Cython Utility 目录: {cython_utility_dir}")
+except Exception as e:
+    print(f"⚠️ 无法收集 Cython Utility: {e}")
+    
 home = os.path.expanduser('~')
 paddle_model_dir = os.path.join(home, '.paddleocr')
 if os.path.exists(paddle_model_dir):
