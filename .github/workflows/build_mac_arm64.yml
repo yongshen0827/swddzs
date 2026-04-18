@@ -1,4 +1,4 @@
-name: 打包 macOS 应用 (Intel 兼容版 - 修复依赖)
+name: 打包 macOS 应用 (Intel 兼容版 - 最终修复)
 
 on:
   workflow_dispatch:
@@ -11,43 +11,60 @@ jobs:
     - name: 检出代码
       uses: actions/checkout@v4
 
-        # ==========================================
-    # 终极修复：解决 macOS 14 Python 安装时 dyld 库缺失问题
+    # ==========================================
+    # 1. 修复系统依赖 (解决 Python 安装报错)
     # ==========================================
     - name: 安装并配置 gettext 依赖
       run: |
-        # 1. 安装库
         brew install gettext
-        
-        # 2. 关键修复：设置环境变量，告诉编译器和加载器去哪里找库文件
-        # 这一步是解决 dyld[xxx]: Library not loaded 错误的核心
+        # 设置环境变量，确保 Python 安装脚本能找到库文件
         echo 'export LDFLAGS="-L/usr/local/opt/gettext/lib"' >> ~/.zshrc
         echo 'export CPPFLAGS="-I/usr/local/opt/gettext/include"' >> ~/.zshrc
-        echo 'export PKG_CONFIG_PATH="/usr/local/opt/gettext/lib/pkgconfig"' >> ~/.zshrc
-        
-        # 3. 立即生效（针对当前会话）
         export LDFLAGS="-L/usr/local/opt/gettext/lib"
         export CPPFLAGS="-I/usr/local/opt/gettext/include"
-        export PKG_CONFIG_PATH="/usr/local/opt/gettext/lib/pkgconfig"
-        
-        # 4. 强制链接（确保符号链接存在）
+        # 强制链接
         brew link gettext --force
 
-    - name: 安装依赖 (Intel 版)
+    # ==========================================
+    # 2. 设置 Intel 架构 Python (解决 Paddle 架构不匹配)
+    # ==========================================
+    - name: 设置 Python 3.9 (强制 x64/Intel 架构)
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.9'
+        architecture: 'x64'  # 关键：强制使用 Intel 架构
+
+    # ==========================================
+    # 3. 修复 Numpy 冲突并安装依赖 (解决 pip 安装失败)
+    # ==========================================
+    - name: 安装依赖 (预装兼容版 Numpy)
       run: |
+        # 清理缓存
+        pip cache purge
         pip install --upgrade pip
+        
+        # 【核心修复】先强制安装 numpy 1.21.6
+        # 这是 Python 3.9 + Paddle 2.6.x 在 macOS 上的最佳兼容版本
+        # 如果不先装这个，pip 会自动安装新版 numpy 导致 Paddle 安装失败
+        echo "🔧 正在安装兼容性 Numpy..."
+        pip install "numpy<1.22"
+        
+        # 再安装 requirements.txt
+        echo "📦 正在安装项目依赖..."
         pip install -r requirements.txt
+        
+        # 安装打包工具
         pip install nuitka
 
-    - name: 预下载 OCR 模型
+    - name: 验证架构
       run: |
-        python -c "
-        try:
-            from paddleocr import PaddleOCR
-            ocr = PaddleOCR(use_angle_cls=True, lang='ch')
-        except Exception as e:
-            print(f'PaddleOCR 模型预加载失败: {e}')
-        "
+        echo "当前 Python 架构:"
+        python -c "import platform; print(platform.machine())"
+        if [ "$(python -c 'import platform; print(platform.machine())')" != "x86_64" ]; then
+          echo "❌ 错误：Python 不是 Intel 架构!"
+          exit 1
+        fi
+        echo "✅ 成功：Python 运行在 Intel 架构下"
 
     - name: 执行 Nuitka 打包
       run: |
@@ -65,13 +82,13 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: macOS-Intel-App
-        path: dist_nuitka/商委订单审核助手服务端\ \(Intel版\).app
+        path: dist_nuitka/商委订单审核助手服务端\ $Intel版$.app
 
   # ==========================================
-  # 优化后的测试环节
+  # 测试环节
   # ==========================================
   test-on-clean-macos:
-    name: 🧪 验证 Web 服务启动 (智能轮询)
+    name: 🧪 验证 Web 服务启动
     runs-on: macos-14
     needs: build
     steps:
@@ -91,61 +108,53 @@ jobs:
         EXEC_PATH="$APP_PATH/Contents/MacOS/main"
         chmod +x "$EXEC_PATH"
 
-        # 3. 后台启动服务，重定向输出到日志文件
-        # 注意：Nuitka 打包的程序启动通常比原生 Python 慢，因为要解压环境
+        # 3. 后台启动服务
         "$EXEC_PATH" > server_output.log 2>&1 &
         echo "🚀 服务进程已启动，PID: $!"
 
-        # 4. 智能轮询检查 (最多等待 180 秒)
+        # 4. 智能轮询检查 (最多等待 60 秒)
         echo "⏳ 开始监控日志，等待服务就绪..."
-        MAX_WAIT=180
+        MAX_WAIT=60
         WAIT_UNTIL=$(($(date +%s) + MAX_WAIT))
         
         while true; do
-            # 检查是否超时
             if [ $(date +%s) -gt $WAIT_UNTIL ]; then
                 echo "❌ 等待超时 (${MAX_WAIT}秒)，服务未启动。最后日志如下："
                 tail -n 20 server_output.log
                 exit 1
             fi
 
-            # 检查日志中是否包含成功标志
-            # 精准匹配你提供的日志格式
+            # 检查成功标志
             if grep -q "Uvicorn running on http://127.0.0.1:5678" server_output.log; then
                 echo "✅ 服务启动成功！检测到目标日志。"
                 break
             fi
             
-            # 如果日志还没刷出来，检查是否有致命错误 (如库丢失)
+            # 检查致命错误
             if grep -q "Library not loaded" server_output.log; then
-                echo "❌ 检测到动态库丢失错误，停止等待。"
+                echo "❌ 检测到动态库丢失错误。"
                 cat server_output.log
                 exit 1
             fi
             if grep -q "ModuleNotFoundError" server_output.log; then
-                echo "❌ 检测到模块丢失错误，停止等待。"
+                echo "❌ 检测到模块丢失错误。"
                 cat server_output.log
                 exit 1
             fi
 
-            # 等待 2 秒后再次检查
             sleep 2
             echo -n "."
         done
 
-    - name: 最终连通性测试 (兜底)
+    - name: 最终连通性测试
       run: |
-        # 即使日志显示成功，我们也尝试访问一下端口，确保万无一失
         echo "🔍 正在测试端口 5678 连通性..."
-        
-        # 尝试访问根路径，超时设置为 5 秒
         HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://127.0.0.1:5678/ || echo "000")
         
         if [ "$HTTP_CODE" == "200" ] || [ "$HTTP_CODE" == "404" ]; then
             echo "✅ 接口响应正常 (HTTP $HTTP_CODE)。打包验证通过！"
         else
-            echo "⚠️ 接口响应异常 (HTTP $HTTP_CODE)。虽然日志显示启动，但网络请求失败。"
-            echo "查看完整日志："
+            echo "⚠️ 接口响应异常 (HTTP $HTTP_CODE)。"
             cat server_output.log
             exit 1
         fi
