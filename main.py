@@ -5,43 +5,61 @@ if getattr(sys, 'frozen', False):
     # PyInstaller 打包后的资源根目录
     base_path = sys._MEIPASS if hasattr(sys, '_MEIPASS') else os.path.dirname(sys.executable)
 
-    # ----- macOS 动态库搜索路径（关键）-----
+    # ---------- 核心修复：纠正 sys.prefix / sys.exec_prefix ----------
+    # Paddle 内部会使用这些路径构建库搜索路径，必须设为有效值
+    sys.prefix = base_path
+    sys.exec_prefix = base_path
+
+    # ----- macOS 动态库搜索路径 -----
     if sys.platform == 'darwin':
         lib_dir = os.path.dirname(sys.executable)
         current = os.environ.get('DYLD_FALLBACK_LIBRARY_PATH', '')
         os.environ['DYLD_FALLBACK_LIBRARY_PATH'] = lib_dir + (os.pathsep + current if current else '')
-        print(f"📚 动态库路径: {lib_dir}")
+        print(f"📚 动态库基础路径: {lib_dir}")
 
     # ----- 模型路径设置 -----
     paddleocr_home = os.path.join(base_path, '.paddleocr')
     if os.path.exists(paddleocr_home):
         os.environ['PADDLEOCR_HOME'] = paddleocr_home
-        print(f"PaddleOCR 模型路径设置为: {paddleocr_home}")
+        print(f"PaddleOCR 模型路径: {paddleocr_home}")
 
     easyocr_home = os.path.join(base_path, '.EasyOCR')
     if os.path.exists(easyocr_home):
         os.environ['EASYOCR_MODULE_PATH'] = easyocr_home
-        print(f"EasyOCR 模型路径设置为: {easyocr_home}")
+        print(f"EasyOCR 模型路径: {easyocr_home}")
 
-    # ---------- 新增补丁：修复 site.USER_SITE 为 None 的问题 ----------
+    # ---------- 修复 site.USER_SITE 为 None ----------
     import site
     if site.USER_SITE is None:
-        # 为 site.USER_SITE 创建一个临时但有效的路径
         temp_user_site = os.path.join(os.path.dirname(sys.executable), '_user_site')
         os.makedirs(temp_user_site, exist_ok=True)
         site.USER_SITE = temp_user_site
-        print(f"📦 临时 USER_SITE 已设置为: {temp_user_site}")
+        print(f"📦 临时 USER_SITE: {temp_user_site}")
 
-    # ---------- 新增补丁：确保 Paddle 的 libs 目录在动态库搜索路径中 ----------
+    # ---------- Paddle 动态库路径显式注入 ----------
     try:
         import paddle
-        paddle_libs_dir = os.path.join(os.path.dirname(paddle.__file__), 'libs')
+        paddle_root = os.path.dirname(paddle.__file__)
+        paddle_libs_dir = os.path.join(paddle_root, 'libs')
         if os.path.exists(paddle_libs_dir):
-            os.environ['DYLD_FALLBACK_LIBRARY_PATH'] = paddle_libs_dir + os.pathsep + os.environ.get('DYLD_FALLBACK_LIBRARY_PATH', '')
-            print(f"📚 Paddle libs 已加入搜索路径: {paddle_libs_dir}")
+            # 加入环境变量，确保 Paddle 能找到自己的 .dylib
+            os.environ['PADDLE_LIB_PATH'] = paddle_libs_dir
+            dyld = os.environ.get('DYLD_FALLBACK_LIBRARY_PATH', '')
+            os.environ['DYLD_FALLBACK_LIBRARY_PATH'] = paddle_libs_dir + os.pathsep + dyld
+            print(f"📚 Paddle libs 路径: {paddle_libs_dir}")
+        else:
+            print(f"⚠️ Paddle libs 目录不存在: {paddle_libs_dir}")
     except Exception as e:
-        print(f"⚠️ 无法设置 Paddle libs 路径: {e}")
-    # -----------------------------------------------------------------
+        print(f"⚠️ 无法设置 Paddle 动态库路径: {e}")
+
+    # ---------- 环境变量加固（防止 Illegal instruction）----------
+    # 这些变量在测试工作流中已设置，但这里再设一次可增加健壮性
+    os.environ.setdefault('MKL_DEBUG_CPU_TYPE', '5')
+    os.environ.setdefault('MKL_ENABLE_INSTRUCTIONS', 'SSE4_2')
+    os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
+    os.environ.setdefault('OMP_NUM_THREADS', '1')
+    os.environ.setdefault('KMP_DUPLICATE_LIB_OK', 'TRUE')
+    print("🛡️ 兼容性环境变量已就绪")
 
 else:
     os.environ['PADDLEOCR_HOME'] = os.path.expanduser('~/.paddleocr')
