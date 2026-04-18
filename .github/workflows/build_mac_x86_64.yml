@@ -65,20 +65,25 @@ jobs:
         path: OrderAuditApp-macOS.zip
 
   test:
-    name: 🧪 测试应用启动和接口（兼容模式）
+    name: 🧪 测试 (${{ matrix.os }})
     needs: build
-    runs-on: macos-14
+    strategy:
+      matrix:
+        os: [macos-15-intel, macos-14]
+    runs-on: ${{ matrix.os }}
     steps:
     - name: 下载产物
       uses: actions/download-artifact@v4
       with:
         name: macOS-App
 
-    - name: 诊断 CPU 特性
+    - name: 诊断 CPU 特性（容错）
       run: |
-        echo "===== CPU 品牌与特性 ====="
-        sysctl -n machdep.cpu.brand_string
-        sysctl -a | grep machdep.cpu.features
+        echo "===== 当前测试环境: ${{ matrix.os }} ====="
+        echo "===== CPU 品牌 ====="
+        sysctl -n machdep.cpu.brand_string 2>/dev/null || echo "⚠️ 无法获取 CPU 品牌（虚拟环境正常现象）"
+        echo "===== CPU 特性 ====="
+        sysctl -a 2>/dev/null | grep machdep.cpu.features || echo "⚠️ 无法获取 CPU 特性"
 
     - name: 解压并测试
       run: |
@@ -90,28 +95,23 @@ jobs:
         echo "===== 1. 检查可执行文件架构 ====="
         file "$EXEC_PATH"
         
-        echo "===== 2. 设置兼容性环境变量（修复 Illegal instruction）====="
-        # MKL 兼容模式（禁用 AVX 指令，使用 SSE4.2）
+        echo "===== 2. 设置兼容性环境变量 ====="
         export MKL_DEBUG_CPU_TYPE=5
         export MKL_ENABLE_INSTRUCTIONS=SSE4_2
-        # OpenBLAS 使用单线程，减少复杂性
         export OPENBLAS_NUM_THREADS=1
         export GOTO_NUM_THREADS=1
         export OMP_NUM_THREADS=1
-        # 强制 Python 使用兼容的哈希种子
         export PYTHONHASHSEED=0
-        # 增加日志输出，便于调试
-        export FLAGS_logtostderr=1
-        export GLOG_v=4
+        export KMP_DUPLICATE_LIB_OK=TRUE
         
-        echo "🚀 3. 启动服务（环境变量已生效）..."
+        echo "🚀 3. 启动服务..."
         "$EXEC_PATH" > server.log 2>&1 &
         SERVER_PID=$!
         
         echo "⏳ 4. 等待服务启动 (最多 180 秒)..."
         for i in {1..90}; do
           if ! kill -0 $SERVER_PID 2>/dev/null; then
-            echo "❌ 服务进程已退出 (退出码: $?)"
+            echo "❌ 服务进程已退出"
             echo "===== 服务日志 (最后 100 行) ====="
             tail -100 server.log
             exit 1
