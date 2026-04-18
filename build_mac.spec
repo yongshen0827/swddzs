@@ -2,7 +2,9 @@
 
 import os
 import sys
-from PyInstaller.utils.hooks import collect_submodules, collect_data_files, collect_dynamic_libs
+from PyInstaller.utils.hooks import (
+    collect_submodules, collect_data_files, collect_dynamic_libs, collect_all
+)
 
 block_cipher = None
 
@@ -49,22 +51,6 @@ hiddenimports = [
     'importlib_metadata', 'importlib_resources', 'typing_extensions',
     'babel.numbers', 'jinja2.ext',
     '_rapidfuzz_cpp', 'rapidfuzz',
-
-    # ----- 修复 jaraco/pkg_resources 缺失 -----
-    'pkg_resources',
-    'pkg_resources.py2_warn',
-    'pkg_resources._vendor',
-    'pkg_resources._vendor.jaraco',
-    'pkg_resources._vendor.jaraco.functools',
-    'pkg_resources._vendor.jaraco.context',
-    'pkg_resources._vendor.jaraco.text',
-    'pkg_resources._vendor.more_itertools',
-    'pkg_resources._vendor.packaging',
-    'pkg_resources.extern',
-    'jaraco',
-    'jaraco.functools',
-    'jaraco.context',
-    'jaraco.text',
 ]
 
 # 自动收集子模块
@@ -82,9 +68,6 @@ hiddenimports += collect_submodules('uvicorn')
 hiddenimports += collect_submodules('fastapi')
 hiddenimports += collect_submodules('modelscope')
 hiddenimports += collect_submodules('visualdl')
-hiddenimports += collect_submodules('pkg_resources._vendor')
-
-hiddenimports = list(set(hiddenimports))
 
 # ==================== 2. 数据文件（模型） ====================
 datas = []
@@ -135,7 +118,23 @@ try:
 except Exception as e:
     print(f"⚠️ 无法定位 Paddle 动态库目录: {e}")
 
-# ==================== 4. 排除项 ====================
+# ==================== 4. 彻底解决 pkg_resources/jaraco 缺失 ====================
+# 使用 collect_all 强制收集 pkg_resources 的所有内容
+pkg_resources_all = collect_all('pkg_resources')
+datas += pkg_resources_all[0]          # 数据文件
+binaries += pkg_resources_all[1]       # 二进制文件
+hiddenimports += pkg_resources_all[2]  # 隐藏导入
+
+# 同时也对 setuptools 做同样处理（pkg_resources 与其紧密相关）
+setuptools_all = collect_all('setuptools')
+datas += setuptools_all[0]
+binaries += setuptools_all[1]
+hiddenimports += setuptools_all[2]
+
+# 去重
+hiddenimports = list(set(hiddenimports))
+
+# ==================== 5. 排除项 ====================
 excludes = [
     'tkinter', 'test', 'unittest', 'pytest', 'setuptools', 'pip',
     'IPython', 'jupyter', 'notebook', 'matplotlib.tests',
@@ -143,7 +142,7 @@ excludes = [
     'torch.cuda', 'torch.distributed',
 ]
 
-# ==================== 5. Analysis ====================
+# ==================== 6. Analysis ====================
 a = Analysis(
     ['main.py'],
     pathex=[],
@@ -162,7 +161,7 @@ a = Analysis(
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
-# ==================== 6. EXE ====================
+# ==================== 7. EXE ====================
 exe = EXE(
     pyz,
     a.scripts,
@@ -183,7 +182,7 @@ exe = EXE(
     entitlements_file=None,
 )
 
-# ==================== 7. COLLECT ====================
+# ==================== 8. COLLECT ====================
 coll = COLLECT(
     exe,
     a.binaries,
@@ -195,7 +194,7 @@ coll = COLLECT(
     name='OrderAuditApp',
 )
 
-# ==================== 8. BUNDLE ====================
+# ==================== 9. BUNDLE ====================
 app = BUNDLE(
     coll,
     name='商委订单审核助手服务端.app',
