@@ -1,4 +1,4 @@
-name: 打包 macOS ARM64 应用并测试
+name: 打包 macOS ARM64 应用 (Conda)
 
 on:
   workflow_dispatch:
@@ -6,44 +6,34 @@ on:
 jobs:
   build:
     runs-on: macos-14
+    defaults:
+      run:
+        shell: bash -el {0}   # 必须，使 conda activate 生效
 
     steps:
     - name: 检出代码
       uses: actions/checkout@v4
 
-    - name: 设置 Python 虚拟环境 (强制 ARM64)
-      run: |
-        arch -arm64 python3 -m venv venv
-        source venv/bin/activate
-        echo "VIRTUAL_ENV=$PWD/venv" >> $GITHUB_ENV
-        echo "$PWD/venv/bin" >> $GITHUB_PATH
+    - name: 设置 Miniforge (Conda)
+      uses: conda-incubator/setup-miniconda@v3
+      with:
+        miniforge-version: latest
+        environment-file: environment.yml
+        activate-environment: order-audit
+        python-version: 3.9
+        auto-activate-base: false
 
-    - name: 升级 pip 和基础工具
+    - name: 显示环境信息 (验证架构)
       run: |
-        source venv/bin/activate
-        arch -arm64 pip install --upgrade pip setuptools wheel
-
-    - name: 安装项目依赖 (锁定稳定版本)
-      run: |
-        source venv/bin/activate
-        arch -arm64 pip install numpy==1.26.4
-        arch -arm64 pip install scipy==1.7.3        # 1.7.3 是第一个提供 ARM64 wheel 的版本
-        arch -arm64 pip install -r requirements.txt
-
-    - name: 验证关键库的架构 (确保无 x86_64 混入)
-      run: |
-        source venv/bin/activate
-        echo "===== Python 架构 ====="
-        arch -arm64 python -c "import platform; print(platform.machine()); assert platform.machine() == 'arm64'"
-        echo "===== 检查动态库架构 (前 20 个) ====="
-        find venv/lib -name "*.dylib" -o -name "*.so" | head -20 | while read lib; do
-          file "$lib" | grep -v "arm64" && echo "⚠️ 非 ARM64 库: $lib"
-        done
+        conda info
+        conda list
+        python -c "import platform; print('Python arch:', platform.machine()); assert platform.machine() == 'arm64'"
+        python -c "import numpy; print('NumPy version:', numpy.__version__)"
+        python -c "import cv2; print('OpenCV version:', cv2.__version__)"
 
     - name: 下载 OCR 模型
       run: |
-        source venv/bin/activate
-        arch -arm64 python -c "
+        python -c "
         from paddleocr import PaddleOCR
         import easyocr
         ocr = PaddleOCR(use_angle_cls=True, lang='ch', show_log=False)
@@ -57,8 +47,7 @@ jobs:
 
     - name: PyInstaller 打包
       run: |
-        source venv/bin/activate
-        arch -arm64 pyinstaller --clean --noconfirm build_mac_arm64.spec
+        pyinstaller --clean --noconfirm build_mac_arm64.spec
 
     - name: 验证打包产物
       run: |
@@ -85,6 +74,9 @@ jobs:
     name: 🧪 测试应用启动和接口连通性
     runs-on: macos-14
     needs: build
+    defaults:
+      run:
+        shell: bash -el {0}
 
     steps:
     - name: 下载 zip 包
@@ -113,7 +105,7 @@ jobs:
         SERVER_PID=$!
         echo "SERVER_PID=$SERVER_PID" >> $GITHUB_ENV
         
-        echo "⏳ 等待服务启动 (最多 120 秒，首次加载模型较慢)..."
+        echo "⏳ 等待服务启动 (最多 120 秒)..."
         MAX_WAIT=120
         WAIT_UNTIL=$(($(date +%s) + MAX_WAIT))
         
