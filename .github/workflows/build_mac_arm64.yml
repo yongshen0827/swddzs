@@ -1,4 +1,4 @@
-name: 打包 macOS ARM64 应用 (Conda)
+name: 打包 macOS ARM64 应用 (Conda + Pip)
 
 on:
   workflow_dispatch:
@@ -14,32 +14,49 @@ jobs:
     - name: 检出代码
       uses: actions/checkout@v4
 
-    - name: 设置 Miniforge (Conda)
+    - name: 设置 Miniforge (Conda) 并启用 libmamba 求解器
       uses: conda-incubator/setup-miniconda@v3
       with:
         miniforge-version: latest
+        # 使用精简的环境文件，只包含 Python 和 pip
         environment-file: environment.yml
         activate-environment: order-audit
-        python-version: 3.9
+        python-version: '3.9'
         auto-activate-base: false
+        # 关键：启用内置的 libmamba 求解器，稳定且快速
+        conda-solver: libmamba
 
     - name: 显示环境信息 (验证架构)
       run: |
         conda info
         conda list
         python -c "import platform; print('Python arch:', platform.machine()); assert platform.machine() == 'arm64'"
-        python -c "import numpy; print('NumPy version:', numpy.__version__)"
-        python -c "import cv2; print('OpenCV version:', cv2.__version__)"
 
-    - name: 下载 OCR 模型
-      run: |
-        python -c "
-        from paddleocr import PaddleOCR
-        import easyocr
-        ocr = PaddleOCR(use_angle_cls=True, lang='ch', show_log=False)
-        reader = easyocr.Reader(['ch_sim', 'en'], gpu=False)
-        print('✅ 模型下载完成')
-        "
+    - name: 使用 pip 安装项目依赖 (带重试)
+      uses: nick-fields/retry@v2
+      with:
+        timeout_minutes: 10
+        max_attempts: 3
+        retry_on: error
+        command: |
+          # 现在，所有依赖都由 pip 来安装，这极大地减轻了 conda 的求解负担
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+    - name: 下载 OCR 模型 (带重试)
+      uses: nick-fields/retry@v2
+      with:
+        timeout_minutes: 10
+        max_attempts: 3
+        retry_on: error
+        command: |
+          python -c "
+          from paddleocr import PaddleOCR
+          import easyocr
+          ocr = PaddleOCR(use_angle_cls=True, lang='ch', show_log=False)
+          reader = easyocr.Reader(['ch_sim', 'en'], gpu=False)
+          print('✅ 模型下载完成')
+          "
 
     - name: 清理旧构建
       run: |
@@ -105,7 +122,7 @@ jobs:
         SERVER_PID=$!
         echo "SERVER_PID=$SERVER_PID" >> $GITHUB_ENV
         
-        echo "⏳ 等待服务启动 (最多 120 秒)..."
+        echo "⏳ 等待服务启动 (最多 120 秒，首次加载模型较慢)..."
         MAX_WAIT=120
         WAIT_UNTIL=$(($(date +%s) + MAX_WAIT))
         
