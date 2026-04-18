@@ -64,7 +64,7 @@ jobs:
         fi
 
     # ==========================================
-    # 3. 执行 Nuitka 打包
+    # 3. 执行 Nuitka 打包 (已修复卡死问题)
     # ==========================================
     - name: 执行 Nuitka 打包
       run: |
@@ -80,6 +80,11 @@ jobs:
           --jobs=2 \
           --output-dir=dist_nuitka \
           --remove-output \
+          # 【关键修复】防止 Nuitka 因缺少 pyi 文件或 ccache 而询问下载
+          --no-pyi-file \
+          # 【关键修复】允许跳过 unittest 导入，消除警告
+          --noinclude-unittest-mode=allow \
+          # 【原有】忽略大型依赖 (保持原样)
           --nofollow-import-to=torch \
           --nofollow-import-to=numpy \
           --nofollow-import-to=PIL \
