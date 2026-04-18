@@ -11,10 +11,6 @@ jobs:
     - name: 检出代码
       uses: actions/checkout@v4
 
-    - name: 安装编译工具链 (gfortran)
-      run: |
-        brew install gfortran
-
     - name: 设置 Python 虚拟环境 (强制 ARM64)
       run: |
         arch -arm64 python3 -m venv venv
@@ -27,17 +23,11 @@ jobs:
         source venv/bin/activate
         arch -arm64 pip install --upgrade pip setuptools wheel
 
-    - name: 安装关键科学计算库 (允许源码编译)
+    - name: 安装项目依赖 (锁定稳定版本)
       run: |
         source venv/bin/activate
-        # 不再限制 --only-binary，允许必要时从源码构建
-        # numpy 1.26.4 在 ARM64 可能无 wheel，pip 会自动 fallback 到源码编译
         arch -arm64 pip install numpy==1.26.4
-        arch -arm64 pip install scipy==1.13.1
-
-    - name: 安装其余依赖
-      run: |
-        source venv/bin/activate
+        arch -arm64 pip install scipy==1.7.3        # 1.7.3 是第一个提供 ARM64 wheel 的版本
         arch -arm64 pip install -r requirements.txt
 
     - name: 验证关键库的架构 (确保无 x86_64 混入)
