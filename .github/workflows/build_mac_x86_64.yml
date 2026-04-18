@@ -5,7 +5,7 @@ on:
 
 jobs:
   build:
-    runs-on: macos-15-intel  # Intel 原生环境，无需排队担忧
+    runs-on: macos-15-intel  # 官方推荐的 x86_64 环境
 
     steps:
     - name: 检出代码
@@ -52,7 +52,7 @@ jobs:
         echo "✅ .app 生成成功"
         ls -la dist/
 
-    - name: 压缩 .app 为 zip (保留目录结构)
+    - name: 压缩 .app 为 zip
       run: |
         cd dist
         zip -r ../OrderAuditApp-macOS.zip "商委订单审核助手服务端.app"
@@ -67,7 +67,7 @@ jobs:
   test:
     name: 🧪 测试应用启动和接口
     needs: build
-    runs-on: macos-14  # 在 Apple Silicon 上测试兼容性
+    runs-on: macos-14  # 在 Apple Silicon 上测试 Rosetta 2 兼容性
     steps:
     - name: 下载产物
       uses: actions/download-artifact@v4
@@ -95,7 +95,7 @@ jobs:
         done
         
         echo "🔍 测试健康检查接口..."
-        curl -f http://127.0.0.1:5678/health
+        curl --retry 5 --retry-delay 2 -f http://127.0.0.1:5678/health
         echo "✅ 健康检查通过"
         
         kill $SERVER_PID 2>/dev/null || true
