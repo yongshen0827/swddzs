@@ -51,6 +51,17 @@ hiddenimports = [
     'importlib_metadata', 'importlib_resources', 'typing_extensions',
     'babel.numbers', 'jinja2.ext',
     '_rapidfuzz_cpp', 'rapidfuzz',
+
+    # ----- 修复 setuptools/_distutils_hack 缺失 -----
+    '_distutils_hack',
+    '_distutils_hack.override',
+    'setuptools._distutils_hack',
+    'setuptools._distutils_hack.override',
+    'setuptools._distutils',
+    'setuptools.command',
+    'setuptools.command.build_ext',
+    'setuptools.command.install',
+    'setuptools.dist',
 ]
 
 # 自动收集子模块
@@ -68,6 +79,9 @@ hiddenimports += collect_submodules('uvicorn')
 hiddenimports += collect_submodules('fastapi')
 hiddenimports += collect_submodules('modelscope')
 hiddenimports += collect_submodules('visualdl')
+hiddenimports += collect_submodules('setuptools')
+
+hiddenimports = list(set(hiddenimports))
 
 # ==================== 2. 数据文件（模型） ====================
 datas = []
@@ -91,6 +105,7 @@ datas += collect_data_files('cv2')
 datas += collect_data_files('torch')
 datas += collect_data_files('sklearn')
 datas += collect_data_files('pydantic')
+datas += collect_data_files('setuptools')
 
 # ==================== 3. 二进制动态库 ====================
 binaries = []
@@ -119,19 +134,16 @@ except Exception as e:
     print(f"⚠️ 无法定位 Paddle 动态库目录: {e}")
 
 # ==================== 4. 彻底解决 pkg_resources/jaraco 缺失 ====================
-# 使用 collect_all 强制收集 pkg_resources 的所有内容
 pkg_resources_all = collect_all('pkg_resources')
-datas += pkg_resources_all[0]          # 数据文件
-binaries += pkg_resources_all[1]       # 二进制文件
-hiddenimports += pkg_resources_all[2]  # 隐藏导入
+datas += pkg_resources_all[0]
+binaries += pkg_resources_all[1]
+hiddenimports += pkg_resources_all[2]
 
-# 同时也对 setuptools 做同样处理（pkg_resources 与其紧密相关）
 setuptools_all = collect_all('setuptools')
 datas += setuptools_all[0]
 binaries += setuptools_all[1]
 hiddenimports += setuptools_all[2]
 
-# 去重
 hiddenimports = list(set(hiddenimports))
 
 # ==================== 5. 排除项 ====================
