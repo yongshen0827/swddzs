@@ -33,35 +33,32 @@ jobs:
 
     - name: 清理旧构建
       run: |
-        rm -rf build dist *.spec.bak
+        rm -rf build dist *.spec.bak *.zip
 
     - name: PyInstaller 打包
       run: |
         pyinstaller --clean --noconfirm build_mac_arm64.spec
 
-    - name: 验证打包产物结构
+    - name: 验证打包产物
       run: |
-        echo "===== dist 目录内容 ====="
-        ls -la dist/
-        echo ""
-        APP_PATH="dist/商委订单审核助手服务端.app"
-        if [ -d "$APP_PATH" ]; then
-          echo "✅ .app 目录存在"
-          echo "===== .app 内部结构 ====="
-          ls -la "$APP_PATH/"
-          echo "===== Contents/MacOS 内容 ====="
-          ls -la "$APP_PATH/Contents/MacOS/"
-        else
-          echo "❌ .app 目录不存在"
+        if [ ! -d "dist/商委订单审核助手服务端.app" ]; then
+          echo "❌ .app 未生成"
           exit 1
         fi
+        echo "✅ .app 生成成功"
+        ls -la dist/
 
-    - name: 上传打包产物（保留 .app 目录）
+    - name: 压缩 .app 为 zip
+      run: |
+        cd dist
+        zip -r ../OrderAuditApp.zip "商委订单审核助手服务端.app"
+        cd ..
+
+    - name: 上传 zip 包
       uses: actions/upload-artifact@v4
       with:
         name: macOS-ARM64-App
-        path: dist/商委订单审核助手服务端.app
-        # 确保保留父目录，不加尾部斜杠
+        path: OrderAuditApp.zip
 
   test:
     name: 🧪 测试应用启动和接口连通性
@@ -69,34 +66,23 @@ jobs:
     needs: build
 
     steps:
-    - name: 下载打包好的 .app
+    - name: 下载 zip 包
       uses: actions/download-artifact@v4
       with:
         name: macOS-ARM64-App
-        path: ./downloaded-app
+        path: ./
 
-    - name: 探查下载目录结构（调试）
+    - name: 解压 .app
       run: |
-        echo "===== downloaded-app 目录 ====="
-        ls -la ./downloaded-app
-        echo ""
-        echo "===== 查找 .app 目录 ====="
-        find ./downloaded-app -name "*.app" -type d
+        unzip -q OrderAuditApp.zip
+        ls -la
 
-    - name: 启动服务并实时监控日志
+    - name: 启动服务
       run: |
-        # 直接使用固定路径，因为 artifact 解压后应保留 "商委订单审核助手服务端.app" 目录
-        APP_PATH="./downloaded-app/商委订单审核助手服务端.app"
-        if [ ! -d "$APP_PATH" ]; then
-          echo "❌ 未找到 .app 包，请检查上方目录结构"
-          exit 1
-        fi
-        echo "✅ 找到 .app: $APP_PATH"
-        
+        APP_PATH="./商委订单审核助手服务端.app"
         EXEC_PATH="$APP_PATH/Contents/MacOS/main"
         if [ ! -f "$EXEC_PATH" ]; then
-          echo "⚠️ 可执行文件 main 不存在，尝试列出 Contents/MacOS:"
-          ls -la "$APP_PATH/Contents/MacOS/"
+          echo "❌ 可执行文件不存在: $EXEC_PATH"
           exit 1
         fi
         chmod +x "$EXEC_PATH"
@@ -107,34 +93,23 @@ jobs:
         echo "SERVER_PID=$SERVER_PID" >> $GITHUB_ENV
         
         echo "⏳ 等待服务启动（最多 60 秒）..."
-        MAX_WAIT=60
-        WAIT_UNTIL=$(($(date +%s) + MAX_WAIT))
-        
-        while true; do
-            if [ $(date +%s) -gt $WAIT_UNTIL ]; then
-                echo "❌ 等待超时，服务未启动"
-                echo "===== 服务日志 ====="
-                cat server_output.log
-                exit 1
-            fi
-            if grep -q "Uvicorn running on http://127.0.0.1:5678" server_output.log; then
-                echo "✅ 服务启动成功"
-                break
-            fi
-            sleep 2
+        for i in {1..30}; do
+          if grep -q "Uvicorn running on http://127.0.0.1:5678" server_output.log; then
+            echo "✅ 服务启动成功"
+            break
+          fi
+          sleep 2
         done
 
     - name: 测试健康检查接口
       run: |
-        echo "🔍 测试 http://127.0.0.1:5678/health ..."
         HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://127.0.0.1:5678/health || echo "000")
         if [ "$HTTP_CODE" == "200" ]; then
-            echo "✅ 健康检查通过 (HTTP $HTTP_CODE)"
+          echo "✅ 健康检查通过 (HTTP $HTTP_CODE)"
         else
-            echo "❌ 健康检查失败 (HTTP $HTTP_CODE)"
-            echo "===== 服务日志 ====="
-            cat server_output.log
-            exit 1
+          echo "❌ 健康检查失败 (HTTP $HTTP_CODE)"
+          cat server_output.log
+          exit 1
         fi
 
     - name: 清理服务进程
