@@ -6,7 +6,7 @@ from PyInstaller.utils.hooks import collect_submodules, collect_data_files, coll
 
 block_cipher = None
 
-# ---------- 1. 隐藏导入（针对 PaddleOCR / EasyOCR / 科学计算库）----------
+# ---------- 1. 隐藏导入（参考 Windows 成功经验并补充 macOS 特定项）----------
 hiddenimports = [
     # Paddle 系列
     'paddle', 'paddleocr', 'paddlex',
@@ -32,12 +32,12 @@ hiddenimports = [
     'pkg_resources', 'typing_extensions', 'babel.numbers', 'jinja2.ext',
 ]
 
-# 使用工具函数自动收集子模块（减少遗漏）
+# 自动收集子模块
 hiddenimports += collect_submodules('paddleocr')
 hiddenimports += collect_submodules('paddle')
 hiddenimports += collect_submodules('easyocr')
 hiddenimports += collect_submodules('torch')
-hiddenimports = list(set(hiddenimports))  # 去重
+hiddenimports = list(set(hiddenimports))
 
 # ---------- 2. 数据文件（OCR 模型）----------
 datas = []
@@ -51,7 +51,6 @@ easy_model_dir = os.path.join(home, '.EasyOCR')
 if os.path.exists(easy_model_dir):
     datas.append((easy_model_dir, '.EasyOCR'))
 
-# 收集库自带的数据文件
 datas += collect_data_files('paddleocr')
 datas += collect_data_files('easyocr')
 datas += collect_data_files('cv2')
@@ -100,7 +99,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='main',                     # 内部可执行文件名，使用英文避免路径问题
+    name='main',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -108,7 +107,7 @@ exe = EXE(
     console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
-    target_arch='x86_64',            # 关键：指定 x86_64 架构
+    target_arch='x86_64',
     codesign_identity=None,
     entitlements_file=None,
 )
@@ -122,13 +121,13 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='OrderAuditApp',            # 内部收集目录名，英文
+    name='OrderAuditApp',
 )
 
-# ---------- 8. BUNDLE（生成 .app）----------
+# ---------- 8. BUNDLE ----------
 app = BUNDLE(
     coll,
-    name='商委订单审核助手服务端.app',   # 最终用户看到的 .app 名称
+    name='商委订单审核助手服务端.app',
     icon=None,
     bundle_identifier='com.shangwei.order.audit',
     info_plist={
