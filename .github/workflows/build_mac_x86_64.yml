@@ -24,23 +24,17 @@ jobs:
         auto-activate-base: false
         conda-solver: libmamba
 
-    - name: 下载并安装 PaddlePaddle (强制 x86_64 wheel)
+    - name: 安装 PaddlePaddle (强制 x86_64 wheel)
       uses: nick-fields/retry@v2
       with:
         timeout_minutes: 5
         max_attempts: 3
         retry_on: error
         command: |
-          # 第一步：使用 pip download 下载指定平台的 wheel
-          pip download \
-            --platform macosx_10_9_x86_64 \
-            --only-binary=:all: \
-            --no-deps \
-            --dest /tmp/paddle_wheel \
+          # 关键命令：使用百度官方镜像源，并指定 macOS x86_64 平台
+          pip install --platform macosx_10_9_x86_64 --only-binary=:all: \
+            --index-url https://mirror.baidu.com/pypi/simple \
             paddlepaddle==2.6.2
-          
-          # 第二步：从下载的 wheel 文件直接安装
-          pip install /tmp/paddle_wheel/paddlepaddle-*.whl
 
     - name: 安装其余项目依赖
       uses: nick-fields/retry@v2
@@ -51,7 +45,14 @@ jobs:
         command: |
           pip install --upgrade pip
           pip install -r requirements.txt
-
+    - name: 验证系统架构和 Rosetta 状态
+      run: |
+        echo "===== 系统架构 ====="
+        uname -m
+        echo "===== 验证 Rosetta 2 ====="
+        # 检查是否可运行 x86_64 二进制（测试用）
+        arch -x86_64 /usr/bin/true && echo "✅ Rosetta 2 可用"
+        
     - name: 验证关键库架构
       run: |
         python -c "import platform; print('Python 架构:', platform.machine()); assert platform.machine() == 'x86_64', 'Python 必须为 x86_64'"
