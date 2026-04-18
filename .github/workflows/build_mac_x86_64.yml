@@ -65,16 +65,26 @@ jobs:
         path: OrderAuditApp-macOS.zip
 
   test:
-    name: 🧪 测试应用启动和接口
+    name: 🧪 测试应用启动和接口 (${{ matrix.runner }})
     needs: build
-    runs-on: macos-14
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15-intel, macos-14]   # Intel 原生 + Rosetta 2 转译环境
     steps:
     - name: 下载产物
       uses: actions/download-artifact@v4
       with:
         name: macOS-App
 
-    - name: 解压并诊断启动
+    - name: 诊断 CPU 特性
+      run: |
+        echo "===== CPU 品牌与特性 (${{ matrix.runner }}) ====="
+        sysctl -n machdep.cpu.brand_string
+        sysctl -a | grep machdep.cpu.features || true
+
+    - name: 解压并测试
       run: |
         unzip -q OrderAuditApp-macOS.zip
         APP_PATH="./商委订单审核助手服务端.app"
@@ -84,32 +94,39 @@ jobs:
         echo "===== 1. 检查可执行文件架构 ====="
         file "$EXEC_PATH"
         
-        echo "===== 2. 检查依赖动态库 ====="
-        otool -L "$EXEC_PATH" | head -30
+        echo "===== 2. 设置兼容性环境变量 ====="
+        # MKL 兼容模式（禁用 AVX 指令，使用 SSE4.2）
+        export MKL_DEBUG_CPU_TYPE=5
+        export MKL_ENABLE_INSTRUCTIONS=SSE4_2
+        # OpenBLAS 使用单线程
+        export OPENBLAS_NUM_THREADS=1
+        export GOTO_NUM_THREADS=1
+        export OMP_NUM_THREADS=1
+        # 强制 Python 哈希种子
+        export PYTHONHASHSEED=0
         
-        echo "===== 3. 列出打包的模型文件 ====="
-        ls -la "$APP_PATH/Contents/Resources/.paddleocr" 2>/dev/null || echo "⚠️ 未找到 .paddleocr 目录"
-        ls -la "$APP_PATH/Contents/Resources/.EasyOCR" 2>/dev/null || echo "⚠️ 未找到 .EasyOCR 目录"
-        
-        echo "🚀 4. 启动服务（实时输出日志）..."
-        # 使用 unbuffer 方式直接运行，日志实时打印到终端
-        "$EXEC_PATH" 2>&1 &
+        echo "🚀 3. 启动服务（环境变量已生效）..."
+        "$EXEC_PATH" > server.log 2>&1 &
         SERVER_PID=$!
         
-        echo "⏳ 等待服务启动 (最多 180 秒)..."
+        echo "⏳ 4. 等待服务启动 (最多 180 秒)..."
         for i in {1..90}; do
           if ! kill -0 $SERVER_PID 2>/dev/null; then
             echo "❌ 服务进程已退出 (退出码: $?)"
-            break
+            echo "===== 服务日志 (最后 100 行) ====="
+            tail -100 server.log
+            exit 1
           fi
           if curl -s -f http://127.0.0.1:5678/health > /dev/null 2>&1; then
-            echo "✅ 服务启动成功！健康检查通过。"
+            echo "✅ 服务启动成功！健康检查通过 (耗时约 $((i*2)) 秒)"
             kill $SERVER_PID
             exit 0
           fi
           sleep 2
         done
         
-        echo "❌ 服务启动失败，终止进程并输出剩余日志..."
+        echo "❌ 服务启动超时"
+        echo "===== 服务日志 (全部) ====="
+        cat server.log
         kill $SERVER_PID 2>/dev/null || true
         exit 1
