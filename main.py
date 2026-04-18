@@ -1030,13 +1030,16 @@ def extract_logistics_fields(ocr_text: str, expected: Dict[str, Any]) -> Dict[st
             print(f"✅ 期望值匹配物流单号: {expected_tracking}")
 
     if not result['tracking_no']:
+        # 尝试匹配常见的物流单号格式（字母数字组合，长度10-30）
         candidates = re.findall(r'\b([A-Za-z0-9]{10,30})\b', ocr_text)
+        # 优先选择包含字母的（如SF开头）
         for cand in candidates:
             if re.search(r'[A-Za-z]', cand):
                 result['tracking_no'] = cand
                 print(f"✅ 提取包含字母的物流单号: {cand}")
                 break
         if not result['tracking_no'] and candidates:
+            # 纯数字单号，优先选长度接近常见长度的
             result['tracking_no'] = max(candidates, key=len)
             print(f"⚠️ 提取最长数字串作为物流单号: {result['tracking_no']}")
 
@@ -1052,30 +1055,45 @@ def extract_logistics_fields(ocr_text: str, expected: Dict[str, Any]) -> Dict[st
                 break
 
     if not result['receiver_name']:
-        match = re.search(r'收货人[：:]\s*([\u4e00-\u9fa5]{2,4})', ocr_text)
+        # 多种收货人标签匹配
+        match = re.search(r'(?:收货人|收件人|联系人)[：:]\s*([\u4e00-\u9fa5·]{2,10})', ocr_text)
         if match:
             result['receiver_name'] = match.group(1)
             print(f"✅ 关键词提取收货人: {result['receiver_name']}")
+        else:
+            # 尝试从 "收货地址：张三 138xxxx 重庆..." 这种格式中提取
+            addr_line_match = re.search(r'收货地址[：:]\s*([\u4e00-\u9fa5·]{2,4})\s*[\d\s]', ocr_text)
+            if addr_line_match:
+                result['receiver_name'] = addr_line_match.group(1)
+                print(f"✅ 从收货地址行提取收货人: {result['receiver_name']}")
 
     # ---------- 收货地址 ----------
     addr_match = re.search(r'详细地址[：:]\s*([^\n]+)', ocr_text)
     if not addr_match:
         addr_match = re.search(r'地址[：:]\s*([^\n]+)', ocr_text)
+    if not addr_match:
+        # 若没有明确标签，则取包含"重庆"且长度大于10的行
+        lines_temp = ocr_text.split('\n')
+        for line in lines_temp:
+            if '重庆' in line and len(line.strip()) > 10:
+                addr_match = re.search(r'(.*重庆.*)', line)
+                break
     if addr_match:
-        result['receiver_address'] = addr_match.group(1).strip()
+        # 清理可能附带的电话号码等
+        raw_addr = addr_match.group(1).strip()
+        # 移除电话号码（连续11位数字）
+        raw_addr = re.sub(r'\b1\d{10}\b', '', raw_addr).strip()
+        result['receiver_address'] = raw_addr
         print(f"✅ 提取收货地址: {result['receiver_address']}")
     else:
-        lines = ocr_text.split('\n')
-        for line in lines:
-            if '重庆' in line and len(line) > 10:
-                result['receiver_address'] = line.strip()
-                print(f"✅ 提取包含重庆的地址行: {result['receiver_address']}")
-                break
-        if not result['receiver_address'] and lines:
-            result['receiver_address'] = max(lines, key=len).strip()
+        # 最后兜底：取最长行（长度>10且含中文）
+        lines_temp = [l.strip() for l in ocr_text.split('\n') if l.strip()]
+        long_lines = [l for l in lines_temp if len(l) > 10 and re.search(r'[\u4e00-\u9fa5]', l)]
+        if long_lines:
+            result['receiver_address'] = max(long_lines, key=len)
             print(f"⚠️ 默认取最长行作为地址: {result['receiver_address']}")
 
-    # ---------- 状态提取（基于时间排序，通用准确） ----------
+    # ---------- 状态提取（增强时间戳解析 + 状态有效性过滤） ----------
     finish_keywords = [
         '已签收', '签收', '已妥投', '妥投', '已送达', '送达',
         '已派送', '派送完成', '派件完成', '快件已签收',
@@ -1083,75 +1101,141 @@ def extract_logistics_fields(ocr_text: str, expected: Dict[str, Any]) -> Dict[st
         '已完成', '完结', '已投递', '投递', '已签收完毕'
     ]
     abnormal_keywords = ['退回', '拒收', '异常', '未签收', '派送失败', '无法派送', '滞留']
-    exclude_keywords = ['预计', '预约', '再派送', '再次派送', '延迟', '转寄']
+    exclude_keywords = ['预计', '预约', '再派送', '再次派送', '延迟', '转寄', '配送时间更改为']
 
-    # 提取带时间戳的行（兼容“时间：”前缀和日期时间紧连）
-    timeline_pattern = re.compile(
-        r'(?:时间[：:]\s*)?(\d{4}-\d{2}-\d{2})\s*(\d{2}:\d{2}:\d{2})\s*(.*)'
-    )
+    # 状态有效性判定：必须包含中文且包含物流相关动作词，且不是纯地址/单号
+    def is_valid_status(text: str) -> bool:
+        if not text:
+            return False
+        text = text.strip()
+        if len(text) < 2:
+            return False
+        # 必须包含中文字符
+        if not re.search(r'[\u4e00-\u9fa5]', text):
+            return False
+        # 必须包含物流动作关键词（如签收、派送、运输、揽件等）
+        action_words = finish_keywords + abnormal_keywords + ['运输', '转运', '发出', '揽收', '揽件', '出库', '入库', '处理', '接单', '下单']
+        if not any(kw in text for kw in action_words):
+            return False
+        # 排除明显的地址行（若包含"重庆"且同时含有"区/县/路/街/号"等，但注意有些状态可能也含地址，如"【重庆】已签收"，故不能一刀切排除，此处仅排除纯地址无动作词的行，上面动作词检查已覆盖）
+        return True
+
     lines = ocr_text.splitlines()
     timeline = []  # (timestamp_str, status_text)
 
+    # 增强的时间戳正则：支持多种紧凑格式
+    timestamp_pattern = re.compile(
+        r'(?:时间[：:]\s*)?'                           # 可选的时间前缀
+        r'(\d{4}[-/年]\d{1,2}[-/月]\d{1,2}[日]?)'      # 日期部分
+        r'\s*'                                          # 可能无空格
+        r'(\d{1,2}[:：]\d{1,2}(?:[:：]\d{1,2})?)'      # 时间部分
+        r'\s*'                                          # 可能空格
+        r'(.*)'                                         # 状态文本
+    )
+
     for i, line in enumerate(lines):
-        line = line.strip()
-        m = timeline_pattern.match(line)
+        line_stripped = line.strip()
+        if not line_stripped:
+            continue
+
+        m = timestamp_pattern.search(line_stripped)
         if m:
-            date_part = m.group(1)
-            time_part = m.group(2)
+            date_part = m.group(1).replace('年', '-').replace('月', '-').replace('日', '')
+            time_part = m.group(2).replace('：', ':')
             timestamp = f"{date_part} {time_part}"
             status_text = m.group(3).strip()
-            # 如果状态文本为空，尝试合并下一行（OCR换行）
+
+            # 若状态文本为空，尝试合并下一行
             if not status_text and i + 1 < len(lines):
                 next_line = lines[i+1].strip()
-                if not timeline_pattern.match(next_line):
+                # 下一行不应包含新的时间戳
+                if not timestamp_pattern.search(next_line):
                     status_text = next_line
-            timeline.append((timestamp, status_text))
 
+            # 若合并后仍然无文本，则取当前行剩余部分作为状态
+            if not status_text:
+                # 例如 "已签收2026-04-16 16:56:58" 这种情况，状态可能在时间之前
+                before_ts = line_stripped[:m.start()].strip()
+                if before_ts:
+                    status_text = before_ts
+
+            # **关键过滤：只有状态文本有效时才加入时间线**
+            if is_valid_status(status_text):
+                timeline.append((timestamp, status_text))
+            else:
+                print(f"⚠️ 过滤无效状态候选: {status_text} (行: {line_stripped})")
+            continue
+
+        # 有些日志中时间戳和状态文本可能被OCR拆成两行，例如：
+        # "已签收"
+        # "2026-04-16 16:56:58"
+        pure_ts_match = re.match(r'^(\d{4}-\d{1,2}-\d{1,2})\s+(\d{1,2}:\d{1,2}(?::\d{1,2})?)$', line_stripped)
+        if pure_ts_match and i > 0:
+            prev_line = lines[i-1].strip()
+            if any(kw in prev_line for kw in finish_keywords + abnormal_keywords):
+                timestamp = f"{pure_ts_match.group(1)} {pure_ts_match.group(2)}"
+                if is_valid_status(prev_line):
+                    timeline.append((timestamp, prev_line))
+                    print(f"🔧 修复跨行时间戳: {timestamp} -> {prev_line}")
+
+    # 若 timeline 不为空，按时间排序取最新状态
     if timeline:
-        # 按时间升序排序，取最后一条（最新状态）
         timeline.sort(key=lambda x: x[0])
-        # 从后往前跳过包含排除词的状态（如“预计送达”）
+        # 从后往前找到第一个不包含排除关键词的状态
         latest_status = None
         for ts, status in reversed(timeline):
             if not any(ek in status for ek in exclude_keywords):
                 latest_status = status
                 break
         if latest_status is None:
-            latest_status = timeline[-1][1]  # 全被排除时取最后一条
+            latest_status = timeline[-1][1]
         result['status'] = latest_status
-        print(f"✅ 基于时间排序提取最新状态: {latest_status}")
+        print(f"✅ 基于时间排序提取最新状态: {latest_status} (共{len(timeline)}条记录)")
     else:
-        # 无时间戳时，假设文本顺序为新→旧（最终状态在最前面）
-        print("⚠️ 未提取到时间戳，按文本顺序取第一个有效状态")
+        # 无时间戳时，按关键词优先级搜索（不依赖行顺序）
+        print("⚠️ 未提取到时间戳，按关键词优先级搜索全文")
         found_status = None
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            if any(ek in line for ek in exclude_keywords):
-                continue
-            if any(kw in line for kw in finish_keywords):
-                found_status = line
-                print(f"✅ 提取完结状态（文本首匹配）: {found_status}")
-                break
+
+        # 优先查找完结状态关键词
+        for kw in finish_keywords:
+            if kw in ocr_text:
+                # 提取包含该关键词的整行或上下文
+                match_line = re.search(rf'^.*{re.escape(kw)}.*$', ocr_text, re.MULTILINE)
+                if match_line:
+                    candidate = match_line.group(0).strip()
+                    if is_valid_status(candidate):
+                        found_status = candidate
+                        print(f"✅ 关键词匹配完结状态: {found_status}")
+                        break
+
         if not found_status:
+            # 次选异常状态
+            for kw in abnormal_keywords:
+                if kw in ocr_text:
+                    match_line = re.search(rf'^.*{re.escape(kw)}.*$', ocr_text, re.MULTILINE)
+                    if match_line:
+                        candidate = match_line.group(0).strip()
+                        if is_valid_status(candidate):
+                            found_status = candidate
+                            print(f"⚠️ 关键词匹配异常状态: {found_status}")
+                            break
+
+        if not found_status:
+            # 最后取文本中第一行非空且非地址行
             for line in lines:
-                line = line.strip()
-                if not line:
+                line_clean = line.strip()
+                if not line_clean or '收货地址' in line_clean:
                     continue
-                if any(ek in line for ek in exclude_keywords):
+                if any(kw in line_clean for kw in exclude_keywords):
                     continue
-                if any(kw in line for kw in abnormal_keywords):
-                    found_status = line
-                    print(f"⚠️ 提取异常状态（文本首匹配）: {found_status}")
+                if is_valid_status(line_clean):
+                    found_status = line_clean
+                    print(f"⚠️ 取首行有效状态行: {found_status}")
                     break
-        if not found_status and lines:
-            found_status = lines[0].strip()
-            print(f"⚠️ 取第一行非空作为状态: {found_status}")
+
         result['status'] = found_status or ''
 
     return result
-
 # =============================================================================
 # 验证辅助函数
 # =============================================================================
