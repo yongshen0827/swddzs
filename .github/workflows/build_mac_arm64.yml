@@ -36,7 +36,7 @@ jobs:
     - name: 执行 PyInstaller 打包
       run: |
         echo "📦 开始 PyInstaller 打包..."
-        pyinstaller --clean --noconfirm build_mac_arm64.spec
+        pyinstaller --onedir --clean --noconfirm build_mac_arm64.spec
 
     - name: 验证打包产物
       run: |
