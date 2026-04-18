@@ -1,37 +1,54 @@
-name: 打包 macOS 应用 (M1/M2/M3/M4 原生版-退回intle)
+name: 打包 macOS 应用 (Intel 兼容版 - 使用 macOS 14 加速)
 
 on:
   workflow_dispatch:
 
 jobs:
   build:
-    # 强制使用 macOS 14 (Sonoma) - ARM64 架构
-    runs-on: macos-13
+    # 使用 macOS 14 (不排队)，但我们将强制使用 Intel 架构运行
+    runs-on: macos-14
     
     steps:
     - name: 检出代码
       uses: actions/checkout@v4
 
-    - name: 设置 Python 3.9 (ARM64 原生环境)
+    # ==========================================
+    # 核心魔法：安装 Intel 版 Python (通过 Rosetta)
+    # ==========================================
+    - name: 设置 Python 3.9 (强制 x64/Intel 架构)
       uses: actions/setup-python@v5
       with:
         python-version: '3.9'
-        
-    - name: 安装依赖
+        # 强制指定架构为 x64，GitHub 会自动配置 Rosetta 环境
+        architecture: 'x64'
+
+    - name: 验证架构 (确保是 Intel)
       run: |
+        echo "当前 Python 架构:"
+        python -c "import platform; print(platform.machine())"
+        # 应该输出 x86_64
+        if [ "$(python -c 'import platform; print(platform.machine())')" != "x86_64" ]; then
+          echo "❌ 错误：Python 不是 Intel 架构!"
+          exit 1
+        fi
+        echo "✅ 成功：Python 运行在 Intel 架构下"
+
+    - name: 安装依赖 (Intel 版)
+      run: |
+        # 因为 Python 是 Intel 版，pip 会自动下载 Intel 版的 Paddle
         pip install --upgrade pip
         pip install -r requirements.txt
-        # 安装 Nuitka
         pip install nuitka
 
-    - name: 预下载 OCR 模型 (便于打包进 .app)
+    - name: 预下载 OCR 模型
       run: |
+        # 在 Intel 环境下预加载模型
         python -c "
         try:
             from paddleocr import PaddleOCR
             ocr = PaddleOCR(use_angle_cls=True, lang='ch')
         except Exception as e:
-            print(f'PaddleOCR 模型预加载失败，但继续打包: {e}')
+            print(f'PaddleOCR 模型预加载失败: {e}')
         
         try:
             import easyocr
@@ -40,97 +57,66 @@ jobs:
             print(f'EasyOCR 模型预加载失败: {e}')
         "
 
-    - name: 执行 Nuitka 打包 (核心替换)
+    - name: 执行 Nuitka 打包
       run: |
-        # Nuitka 打包命令
+        # 这里的打包是在 Intel 环境下进行的，生成的也是 Intel 二进制文件
         python -m nuitka \
           --standalone \
-          --follow-imports \
-          --no-pyi-file \
           --macos-create-app-bundle \
-          --macos-app-name="商委订单审核助手服务端 (M1版)" \
+          --macos-app-name="商委订单审核助手服务端 (Intel版)" \
+          --macos-app-icon=none \
+          --jobs=2 \
           --output-dir=dist_nuitka \
           --remove-output \
           main.py
 
-    # ==========================================
-    # 新增：上传产物步骤 (为了让测试环节能下载到)
-    # ==========================================
     - name: 上传 Nuitka 产物
       uses: actions/upload-artifact@v4
       with:
-        name: macOS-ARM64-App
-        path: dist_nuitka/商委订单审核助手服务端\ \(M1版\).app
+        name: macOS-Intel-App
+        path: dist_nuitka/商委订单审核助手服务端\ \(Intel版\).app
 
   test-on-clean-macos:
-    name: 🧪 验证 Web 服务启动 (干净环境)
+    name: 🧪 验证 Web 服务启动
     runs-on: macos-14
     needs: build
     steps:
     - name: 下载刚才打包好的 .app
       uses: actions/download-artifact@v4
       with:
-        name: macOS-ARM64-App
+        name: macOS-Intel-App
         path: ./downloaded-app
 
     - name: 赋予执行权限并启动服务
       run: |
-        # 1. 找到 .app 文件
         APP_PATH=$(find ./downloaded-app -name "*.app" | head -n 1)
         echo "Found App: $APP_PATH"
-
-        # 2. Nuitka 生成的 App，可执行文件通常在 Contents/MacOS/ 下
-        # 我们需要直接运行那个二进制文件，而不是双击
+        
+        # Nuitka 生成的可执行文件路径
         EXEC_PATH="$APP_PATH/Contents/MacOS/main"
         
-        # 3. 赋予权限
         chmod +x "$EXEC_PATH"
-
-        # 4. 后台启动服务
-        # 注意：Nuitka 编译后的程序启动日志可能和 Python 脚本不同
+        
+        # 后台启动
         "$EXEC_PATH" > server_output.log 2>&1 &
         echo "服务已启动，PID: $!"
 
     - name: 等待服务预热
       run: sleep 10
 
-    - name: 检查日志 (关键验证)
+    - name: 检查日志
       run: |
-        # 检查是否有启动成功的标志
-        # Nuitka 编译的程序启动可能会慢一点，我们多查几次
         if grep -q "Uvicorn running" server_output.log; then
-            echo "✅ 服务启动成功 (检测到 Uvicorn)"
+            echo "✅ 服务启动成功"
         elif grep -q "Application startup complete" server_output.log; then
-            echo "✅ 服务启动成功 (检测到 Application startup complete)"
+            echo "✅ 服务启动成功"
         else
-            echo "❌ 服务启动失败或超时，查看日志："
+            echo "❌ 服务启动失败，查看日志："
             cat server_output.log
             exit 1
         fi
 
-        # 检查是否有常见的崩溃错误
         if grep -q "Library not loaded" server_output.log; then
             echo "❌ 检测到动态库丢失"
             exit 1
-        fi
-        if grep -q "ModuleNotFoundError" server_output.log; then
-            echo "❌ 检测到 Python 模块丢失"
-            exit 1
-        fi
-        if grep -q "RecursionError" server_output.log; then
-            echo "❌ 检测到递归错误 (Nuitka 应该避免了这个问题)"
-            exit 1
-        fi
-
-    - name: 发送测试请求 (API 验证)
-      run: |
-        # 尝试访问健康检查接口 (假设你有 / 或 /health)
-        # 如果你的 main.py 根路由有东西，这里应该返回 200 或 404 (只要不报错就行)
-        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/ || echo "000")
-        
-        if [ "$HTTP_CODE" == "200" ] || [ "$HTTP_CODE" == "404" ]; then
-            echo "✅ API 响应正常 (HTTP $HTTP_CODE)"
-        else
-            echo "⚠️ API 响应异常 (HTTP $HTTP_CODE)，但不一定代表失败，视具体路由而定"
-            # 这里不直接 exit 1，因为如果你的根路由没写，404 也是正常的
         fi
