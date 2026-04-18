@@ -1,4 +1,4 @@
-name: 打包 macOS 应用 (Intel 兼容版 - 排除 Torch 优化)
+name: 打包 macOS 应用 (Intel 兼容版 - 强制 Rosetta 环境)
 
 on:
   workflow_dispatch:
@@ -20,8 +20,9 @@ jobs:
     # ==========================================
     - name: 安装 Homebrew 依赖
       run: |
-        brew install gettext
-        brew link gettext --force
+        # 强制使用 x86_64 架构安装 brew 依赖
+        arch -x86_64 brew install gettext
+        arch -x86_64 brew link gettext --force
         echo "✅ Gettext 已安装并链接"
 
     # ==========================================
@@ -29,14 +30,17 @@ jobs:
     # ==========================================
     - name: 编译并安装 Python (源码构建)
       run: |
+        # 整个脚本强制在 x86_64 环境下运行
+        arch -x86_64 /bin/bash << 'EOF'
         echo "📥 下载 Python ${{ env.PYTHON_VERSION }} 源码..."
         curl -O https://www.python.org/ftp/python/${{ env.PYTHON_VERSION }}/Python-${{ env.PYTHON_VERSION }}.tgz
         tar -xzf Python-${{ env.PYTHON_VERSION }}.tgz
         cd Python-${{ env.PYTHON_VERSION }}
 
         echo "⚙️ 配置编译环境..."
-        export LDFLAGS="-L${{ env.GETTEXT_PATH }}/lib"
-        export CPPFLAGS="-I${{ env.GETTEXT_PATH }}/include"
+        # 注意：x86_64 的 brew 库通常在 /usr/local/lib
+        export LDFLAGS="-L/usr/local/lib"
+        export CPPFLAGS="-I/usr/local/include"
         
         ./configure --prefix=/usr/local --enable-optimizations --with-ensurepip=install
         
@@ -50,6 +54,7 @@ jobs:
         # 创建软链接
         sudo ln -sf /usr/local/bin/python3.9 /usr/local/bin/python
         sudo ln -sf /usr/local/bin/pip3.9 /usr/local/bin/pip
+        EOF
 
     # ==========================================
     # 3. 配置环境变量
@@ -63,30 +68,32 @@ jobs:
     # ==========================================
     - name: 安装依赖 (预装兼容版 Numpy 和 Torch)
       run: |
-        pip install --upgrade pip
+        # 强制使用 x86_64 的 pip 安装依赖
+        arch -x86_64 pip install --upgrade pip
         
         # 强制安装兼容版 Numpy
-        pip install "numpy<1.22"
+        arch -x86_64 pip install "numpy<1.22"
         
-        # 安装 PyTorch (CPU 版本即可，或者你需要 MPS 版本请自行调整)
-        # 这里使用官方推荐的稳定版链接
-        pip install torch torchvision torchaudio
+        # 安装 PyTorch (CPU 版本即可)
+        arch -x86_64 pip install torch torchvision torchaudio
+        
+        # 安装 PaddlePaddle (关键修复：强制下载 x86_64 版本)
+        arch -x86_64 pip install paddlepaddle
         
         # 安装其他依赖
         if [ -f requirements.txt ]; then
-          pip install -r requirements.txt
+          arch -x86_64 pip install -r requirements.txt
         fi
         
-        pip install nuitka
+        arch -x86_64 pip install nuitka
 
     # ==========================================
-    # 5. 执行 Nuitka 打包 (关键修改：排除 Torch)
+    # 5. 执行 Nuitka 打包 (关键修改：排除 Torch/Paddle)
     # ==========================================
     - name: 执行 Nuitka 打包
       run: |
-        # 使用 --nofollow-import-to 告诉 Nuitka 不要碰 torch 和 numpy
-        # 这样可以避免编译数小时甚至卡死
-        python -m nuitka \
+        # 强制在 x86_64 模式下运行 Nuitka，避免 otool 检查 arm64 架构报错
+        arch -x86_64 python -m nuitka \
           --standalone \
           --macos-create-app-bundle \
           --macos-app-name="商委订单审核助手服务端 (Intel版)" \
@@ -97,21 +104,22 @@ jobs:
           --nofollow-import-to=torch \
           --nofollow-import-to=numpy \
           --nofollow-import-to=PIL \
+          --nofollow-import-to=paddle \
           main.py
 
     # ==========================================
-    # 6. 手动注入 Torch 和 Numpy (关键修复)
+    # 6. 手动注入 Torch, Numpy 和 Paddle (关键修复)
     # ==========================================
-    - name: 手动复制 Torch 和 Numpy 到包内
+    - name: 手动复制 Torch, Numpy 和 Paddle 到包内
       run: |
-        echo "🔧 正在手动注入 Torch 和 Numpy..."
+        echo "🔧 正在手动注入依赖库..."
         
         # 定位打包生成的 .app 目录
         APP_PATH=$(find dist_nuitka -name "*.app" | head -n 1)
-        LIB_PATH="$APP_PATH/Contents/MacOS" # Nuitka standalone 模式下，库通常放在这里或同级
+        LIB_PATH="$APP_PATH/Contents/MacOS"
         
-        # 找到 Python 环境的 site-packages
-        SITE_PACKAGES=$(python -c "import site; print(site.getsitepackages()[0])")
+        # 找到 Python 环境的 site-packages (强制使用 x86_64 python 获取路径)
+        SITE_PACKAGES=$(arch -x86_64 python -c "import site; print(site.getsitepackages()[0])")
         
         # 复制 torch
         echo "📦 复制 torch..."
@@ -121,12 +129,16 @@ jobs:
         echo "📦 复制 numpy..."
         cp -r "$SITE_PACKAGES/numpy" "$LIB_PATH/"
         
-        # 复制 PIL (Pillow) - 如果用了图像处理
+        # 复制 paddle (新增)
+        echo "📦 复制 paddle..."
+        cp -r "$SITE_PACKAGES/paddle" "$LIB_PATH/"
+        
+        # 复制 PIL (Pillow)
         if [ -d "$SITE_PACKAGES/PIL" ]; then
             cp -r "$SITE_PACKAGES/PIL" "$LIB_PATH/"
         fi
         
-        # 复制 torchvision (如果用了)
+        # 复制 torchvision
         if [ -d "$SITE_PACKAGES/torchvision" ]; then
             cp -r "$SITE_PACKAGES/torchvision" "$LIB_PATH/"
         fi
@@ -137,7 +149,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: macOS-Intel-App
-        path: dist_nuitka/商委订单审核助手服务端\ \(Intel版\).app
+        path: dist_nuitka/商委订单审核助手服务端\ $Intel版$.app
 
   # ==========================================
   # 测试环节
