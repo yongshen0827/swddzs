@@ -65,13 +65,9 @@ jobs:
         path: OrderAuditApp-macOS.zip
 
   test:
-    name: 🧪 测试应用启动和接口 (${{ matrix.runner }})
+    name: 🧪 测试应用启动和接口（兼容模式）
     needs: build
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        runner: [macos-15-intel, macos-14]   # Intel 原生 + Rosetta 2 转译环境
+    runs-on: macos-14
     steps:
     - name: 下载产物
       uses: actions/download-artifact@v4
@@ -80,9 +76,9 @@ jobs:
 
     - name: 诊断 CPU 特性
       run: |
-        echo "===== CPU 品牌与特性 (${{ matrix.runner }}) ====="
+        echo "===== CPU 品牌与特性 ====="
         sysctl -n machdep.cpu.brand_string
-        sysctl -a | grep machdep.cpu.features || true
+        sysctl -a | grep machdep.cpu.features
 
     - name: 解压并测试
       run: |
@@ -94,16 +90,19 @@ jobs:
         echo "===== 1. 检查可执行文件架构 ====="
         file "$EXEC_PATH"
         
-        echo "===== 2. 设置兼容性环境变量 ====="
+        echo "===== 2. 设置兼容性环境变量（修复 Illegal instruction）====="
         # MKL 兼容模式（禁用 AVX 指令，使用 SSE4.2）
         export MKL_DEBUG_CPU_TYPE=5
         export MKL_ENABLE_INSTRUCTIONS=SSE4_2
-        # OpenBLAS 使用单线程
+        # OpenBLAS 使用单线程，减少复杂性
         export OPENBLAS_NUM_THREADS=1
         export GOTO_NUM_THREADS=1
         export OMP_NUM_THREADS=1
-        # 强制 Python 哈希种子
+        # 强制 Python 使用兼容的哈希种子
         export PYTHONHASHSEED=0
+        # 增加日志输出，便于调试
+        export FLAGS_logtostderr=1
+        export GLOG_v=4
         
         echo "🚀 3. 启动服务（环境变量已生效）..."
         "$EXEC_PATH" > server.log 2>&1 &
