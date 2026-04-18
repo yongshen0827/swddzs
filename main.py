@@ -22,6 +22,27 @@ if getattr(sys, 'frozen', False):
     if os.path.exists(easyocr_home):
         os.environ['EASYOCR_MODULE_PATH'] = easyocr_home
         print(f"EasyOCR 模型路径设置为: {easyocr_home}")
+
+    # ---------- 新增补丁：修复 site.USER_SITE 为 None 的问题 ----------
+    import site
+    if site.USER_SITE is None:
+        # 为 site.USER_SITE 创建一个临时但有效的路径
+        temp_user_site = os.path.join(os.path.dirname(sys.executable), '_user_site')
+        os.makedirs(temp_user_site, exist_ok=True)
+        site.USER_SITE = temp_user_site
+        print(f"📦 临时 USER_SITE 已设置为: {temp_user_site}")
+
+    # ---------- 新增补丁：确保 Paddle 的 libs 目录在动态库搜索路径中 ----------
+    try:
+        import paddle
+        paddle_libs_dir = os.path.join(os.path.dirname(paddle.__file__), 'libs')
+        if os.path.exists(paddle_libs_dir):
+            os.environ['DYLD_FALLBACK_LIBRARY_PATH'] = paddle_libs_dir + os.pathsep + os.environ.get('DYLD_FALLBACK_LIBRARY_PATH', '')
+            print(f"📚 Paddle libs 已加入搜索路径: {paddle_libs_dir}")
+    except Exception as e:
+        print(f"⚠️ 无法设置 Paddle libs 路径: {e}")
+    # -----------------------------------------------------------------
+
 else:
     os.environ['PADDLEOCR_HOME'] = os.path.expanduser('~/.paddleocr')
     os.environ['EASYOCR_MODULE_PATH'] = os.path.expanduser('~/.EasyOCR')
