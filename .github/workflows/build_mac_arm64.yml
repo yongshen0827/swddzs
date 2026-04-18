@@ -54,7 +54,7 @@ jobs:
         name: macOS-ARM64-App
         path: dist/商委订单审核助手服务端.app
 
-  test:
+     test:
     name: 🧪 测试应用启动和接口连通性
     runs-on: macos-14
     needs: build
@@ -66,23 +66,42 @@ jobs:
         name: macOS-ARM64-App
         path: ./downloaded-app
 
+    - name: 探查下载的目录结构（调试用）
+      run: |
+        echo "===== 下载目录内容 ====="
+        ls -la ./downloaded-app
+        echo ""
+        echo "===== 递归列出所有文件 ====="
+        find ./downloaded-app -type f | head -50
+        echo ""
+        echo "===== 查找 .app 目录 ====="
+        find ./downloaded-app -name "*.app" -type d
+
     - name: 启动服务并实时监控日志
       run: |
-        APP_PATH=$(find ./downloaded-app -name "商委订单审核助手服务端.app" -type d | head -n 1)
+        # 先找 .app 目录
+        APP_PATH=$(find ./downloaded-app -name "*.app" -type d | head -n 1)
         if [ -z "$APP_PATH" ]; then
-          echo "❌ 未找到 .app 包"
+          echo "❌ 未找到 .app 包，请检查上方目录结构"
           exit 1
         fi
-        EXEC_PATH="$APP_PATH/Contents/MacOS/main"
-        if [ ! -f "$EXEC_PATH" ]; then
-          echo "❌ 可执行文件不存在: $EXEC_PATH"
+        echo "✅ 找到 .app: $APP_PATH"
+        
+        # 查找可执行文件（可能叫 main 或其他名字）
+        EXEC_PATH=$(find "$APP_PATH" -name "main" -o -name "商委订单审核助手服务端" | head -n 1)
+        if [ -z "$EXEC_PATH" ]; then
+          # 如果找不到，列出 Contents/MacOS 内容
+          echo "⚠️ 未找到可执行文件，列出 Contents/MacOS 内容:"
+          ls -la "$APP_PATH/Contents/MacOS/"
           exit 1
         fi
+        echo "✅ 可执行文件: $EXEC_PATH"
         chmod +x "$EXEC_PATH"
         
         echo "🚀 启动服务..."
         "$EXEC_PATH" > server_output.log 2>&1 &
         SERVER_PID=$!
+        echo "SERVER_PID=$SERVER_PID" >> $GITHUB_ENV
         
         echo "⏳ 等待服务启动（最多 60 秒）..."
         MAX_WAIT=60
@@ -101,9 +120,6 @@ jobs:
             fi
             sleep 2
         done
-
-        # 保持进程运行，后续测试步骤会使用
-        echo "SERVER_PID=$SERVER_PID" >> $GITHUB_ENV
 
     - name: 测试健康检查接口
       run: |
