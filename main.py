@@ -1,18 +1,18 @@
-# 以下是原有的导入和环境设置（保持不变）
 import sys
 import os
 
 if getattr(sys, 'frozen', False):
+    # PyInstaller 打包后的资源根目录
     base_path = sys._MEIPASS if hasattr(sys, '_MEIPASS') else os.path.dirname(sys.executable)
 
-    # ----- 关键：设置动态库搜索路径 -----
+    # ----- macOS 动态库搜索路径（关键）-----
     if sys.platform == 'darwin':
         lib_dir = os.path.dirname(sys.executable)
         current = os.environ.get('DYLD_FALLBACK_LIBRARY_PATH', '')
         os.environ['DYLD_FALLBACK_LIBRARY_PATH'] = lib_dir + (os.pathsep + current if current else '')
         print(f"📚 动态库路径: {lib_dir}")
 
-    # 你原有的模型路径设置
+    # ----- 模型路径设置 -----
     paddleocr_home = os.path.join(base_path, '.paddleocr')
     if os.path.exists(paddleocr_home):
         os.environ['PADDLEOCR_HOME'] = paddleocr_home
@@ -25,10 +25,11 @@ if getattr(sys, 'frozen', False):
 else:
     os.environ['PADDLEOCR_HOME'] = os.path.expanduser('~/.paddleocr')
     os.environ['EASYOCR_MODULE_PATH'] = os.path.expanduser('~/.EasyOCR')
+
 # macOS 特定配置
 if sys.platform == 'darwin':
     os.environ['FLAGS_use_mkldnn'] = '0'
-    os.environ['PADDLE_USE_MPS'] = '1'
+    os.environ['PADDLE_USE_MPS'] = '0'   # x86_64 模式下不启用 MPS
 else:
     os.environ['FLAGS_use_mkldnn'] = '0'
 
