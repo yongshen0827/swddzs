@@ -62,6 +62,13 @@ hiddenimports = [
     'setuptools.command.build_ext',
     'setuptools.command.install',
     'setuptools.dist',
+    'Cython',
+    'Cython.Compiler',
+    'Cython.Compiler.Main',
+    'Cython.Compiler.Symtab',
+    'Cython.Compiler.PyrexTypes',
+    'Cython.Compiler.Code',
+    'Cython.Utils',
 ]
 
 # 自动收集子模块
