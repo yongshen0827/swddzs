@@ -5,7 +5,7 @@ on:
 
 jobs:
   build:
-    runs-on: macos-15-intel  # 官方推荐的 x86_64 环境
+    runs-on: macos-15-intel
 
     steps:
     - name: 检出代码
@@ -67,7 +67,7 @@ jobs:
   test:
     name: 🧪 测试应用启动和接口
     needs: build
-    runs-on: macos-14  # 在 Apple Silicon 上测试 Rosetta 2 兼容性
+    runs-on: macos-14
     steps:
     - name: 下载产物
       uses: actions/download-artifact@v4
