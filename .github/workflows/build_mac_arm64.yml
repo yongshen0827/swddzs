@@ -1,17 +1,17 @@
-name: 打包 macOS ARM64 应用 (PyInstaller)
+name: 打包 macOS ARM64 应用并测试
 
 on:
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: macos-14  # Apple Silicon M1 虚拟机
+    runs-on: macos-14
 
     steps:
     - name: 检出代码
       uses: actions/checkout@v4
 
-    - name: 设置 Python 环境
+    - name: 设置 Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.9'
@@ -21,64 +21,107 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: 预先下载 PaddleOCR 和 EasyOCR 模型
+    - name: 下载 OCR 模型
       run: |
-        echo "📥 触发模型下载..."
         python -c "
         from paddleocr import PaddleOCR
         import easyocr
-        # 只初始化不识别，强制下载模型文件
         ocr = PaddleOCR(use_angle_cls=True, lang='ch', show_log=False)
         reader = easyocr.Reader(['ch_sim', 'en'], gpu=False)
-        print('✅ 模型下载完成')
+        print('模型下载完成')
         "
 
-    - name: 执行 PyInstaller 打包
+    - name: 清理旧构建
       run: |
-        echo "📦 开始 PyInstaller 打包..."
-        pyinstaller --onedir --clean --noconfirm build_mac_arm64.spec
+        rm -rf build dist *.spec.bak
 
-    - name: 验证打包产物
+    - name: PyInstaller 打包
       run: |
-        APP_PATH="dist/商委订单审核助手服务端.app"
-        if [ ! -d "$APP_PATH" ]; then
-          echo "❌ 未生成 .app bundle"
+        pyinstaller --clean --noconfirm build_mac_arm64.spec
+
+    - name: 验证打包产物是否存在
+      run: |
+        if [ ! -d "dist/商委订单审核助手服务端.app" ]; then
+          echo "❌ .app 未生成"
           exit 1
         fi
-        EXEC_PATH="$APP_PATH/Contents/MacOS/商委订单审核助手服务端"
-        if [ ! -f "$EXEC_PATH" ]; then
-          echo "❌ 可执行文件不存在"
-          exit 1
-        fi
-        echo "✅ .app bundle 生成成功"
+        echo "✅ .app 生成成功"
+        ls -la dist/
 
-    - name: 启动服务并验证（可选）
-      run: |
-        APP_PATH="dist/商委订单审核助手服务端.app"
-        EXEC_PATH="$APP_PATH/Contents/MacOS/商委订单审核助手服务端"
-        chmod +x "$EXEC_PATH"
-        
-        # 后台启动
-        "$EXEC_PATH" > server.log 2>&1 &
-        SERVER_PID=$!
-        
-        # 等待最多 30 秒
-        for i in {1..30}; do
-          if grep -q "Uvicorn running on http://127.0.0.1:5678" server.log; then
-            echo "✅ 服务启动成功"
-            break
-          fi
-          sleep 1
-        done
-        
-        # 测试健康接口
-        curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5678/health || echo "⚠️ 健康检查失败"
-        
-        # 终止进程
-        kill $SERVER_PID 2>/dev/null || true
-
-    - name: 上传打包产物
+    - name: 上传打包产物（供测试使用）
       uses: actions/upload-artifact@v4
       with:
         name: macOS-ARM64-App
         path: dist/商委订单审核助手服务端.app
+
+  test:
+    name: 🧪 测试应用启动和接口连通性
+    runs-on: macos-14
+    needs: build
+
+    steps:
+    - name: 下载打包好的 .app
+      uses: actions/download-artifact@v4
+      with:
+        name: macOS-ARM64-App
+        path: ./downloaded-app
+
+    - name: 启动服务并实时监控日志
+      run: |
+        APP_PATH=$(find ./downloaded-app -name "商委订单审核助手服务端.app" -type d | head -n 1)
+        if [ -z "$APP_PATH" ]; then
+          echo "❌ 未找到 .app 包"
+          exit 1
+        fi
+        EXEC_PATH="$APP_PATH/Contents/MacOS/main"
+        if [ ! -f "$EXEC_PATH" ]; then
+          echo "❌ 可执行文件不存在: $EXEC_PATH"
+          exit 1
+        fi
+        chmod +x "$EXEC_PATH"
+        
+        echo "🚀 启动服务..."
+        "$EXEC_PATH" > server_output.log 2>&1 &
+        SERVER_PID=$!
+        
+        echo "⏳ 等待服务启动（最多 60 秒）..."
+        MAX_WAIT=60
+        WAIT_UNTIL=$(($(date +%s) + MAX_WAIT))
+        
+        while true; do
+            if [ $(date +%s) -gt $WAIT_UNTIL ]; then
+                echo "❌ 等待超时，服务未启动"
+                echo "===== 服务日志 ====="
+                cat server_output.log
+                exit 1
+            fi
+            if grep -q "Uvicorn running on http://127.0.0.1:5678" server_output.log; then
+                echo "✅ 服务启动成功"
+                break
+            fi
+            sleep 2
+        done
+
+        # 保持进程运行，后续测试步骤会使用
+        echo "SERVER_PID=$SERVER_PID" >> $GITHUB_ENV
+
+    - name: 测试健康检查接口
+      run: |
+        echo "🔍 测试 http://127.0.0.1:5678/health ..."
+        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://127.0.0.1:5678/health || echo "000")
+        if [ "$HTTP_CODE" == "200" ]; then
+            echo "✅ 健康检查通过 (HTTP $HTTP_CODE)"
+        else
+            echo "❌ 健康检查失败 (HTTP $HTTP_CODE)"
+            echo "===== 服务日志 ====="
+            cat server_output.log
+            exit 1
+        fi
+
+    - name: 清理服务进程
+      if: always()
+      run: |
+        if [ -n "$SERVER_PID" ]; then
+          echo "🧹 终止服务进程 $SERVER_PID"
+          kill $SERVER_PID 2>/dev/null || true
+        fi
