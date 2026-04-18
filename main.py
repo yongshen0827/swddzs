@@ -5,16 +5,12 @@ import os
 if getattr(sys, 'frozen', False):
     base_path = sys._MEIPASS if hasattr(sys, '_MEIPASS') else os.path.dirname(sys.executable)
 
-    # ===== 新增：动态库搜索路径（macOS 必须）=====
+    # ----- 关键：设置动态库搜索路径 -----
     if sys.platform == 'darwin':
-        # 将可执行文件所在目录加入 DYLD_FALLBACK_LIBRARY_PATH
         lib_dir = os.path.dirname(sys.executable)
-        current_fallback = os.environ.get('DYLD_FALLBACK_LIBRARY_PATH', '')
-        if current_fallback:
-            os.environ['DYLD_FALLBACK_LIBRARY_PATH'] = lib_dir + os.pathsep + current_fallback
-        else:
-            os.environ['DYLD_FALLBACK_LIBRARY_PATH'] = lib_dir
-        print(f"动态库搜索路径已设置: {lib_dir}")
+        current = os.environ.get('DYLD_FALLBACK_LIBRARY_PATH', '')
+        os.environ['DYLD_FALLBACK_LIBRARY_PATH'] = lib_dir + (os.pathsep + current if current else '')
+        print(f"📚 动态库路径: {lib_dir}")
 
     # 你原有的模型路径设置
     paddleocr_home = os.path.join(base_path, '.paddleocr')
@@ -29,7 +25,6 @@ if getattr(sys, 'frozen', False):
 else:
     os.environ['PADDLEOCR_HOME'] = os.path.expanduser('~/.paddleocr')
     os.environ['EASYOCR_MODULE_PATH'] = os.path.expanduser('~/.EasyOCR')
-
 # macOS 特定配置
 if sys.platform == 'darwin':
     os.environ['FLAGS_use_mkldnn'] = '0'
