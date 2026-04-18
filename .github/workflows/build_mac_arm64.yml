@@ -1,4 +1,4 @@
-name: 打包 macOS 应用 (Intel 兼容版 - 最终修复)
+name: 打包 macOS 应用 (Intel 兼容版 - 依赖前置修复)
 
 on:
   workflow_dispatch:
@@ -12,21 +12,28 @@ jobs:
       uses: actions/checkout@v4
 
     # ==========================================
-    # 1. 修复系统依赖 (解决 Python 安装报错)
+    # 1. 【关键前置步骤】修复系统依赖
+    # 必须在 setup-python 之前安装！否则 Python 安装会因找不到库而崩溃
     # ==========================================
-    - name: 安装并配置 gettext 依赖
+    - name: 安装并配置 gettext 依赖 (前置)
       run: |
+        echo "🔧 正在安装 gettext..."
         brew install gettext
-        # 设置环境变量，确保 Python 安装脚本能找到库文件
+        
+        # 设置环境变量，确保编译和运行时能找到库
         echo 'export LDFLAGS="-L/usr/local/opt/gettext/lib"' >> ~/.zshrc
         echo 'export CPPFLAGS="-I/usr/local/opt/gettext/include"' >> ~/.zshrc
+        # 立即生效，供后续步骤使用
         export LDFLAGS="-L/usr/local/opt/gettext/lib"
         export CPPFLAGS="-I/usr/local/opt/gettext/include"
-        # 强制链接
+        
+        # 强制链接，确保系统能找到
         brew link gettext --force
+        echo "✅ Gettext 安装并链接完成"
 
     # ==========================================
-    # 2. 设置 Intel 架构 Python (解决 Paddle 架构不匹配)
+    # 2. 设置 Intel 架构 Python
+    # 现在 Python 可以安全地运行 ensurepip 了
     # ==========================================
     - name: 设置 Python 3.9 (强制 x64/Intel 架构)
       uses: actions/setup-python@v5
@@ -35,18 +42,15 @@ jobs:
         architecture: 'x64'  # 关键：强制使用 Intel 架构
 
     # ==========================================
-    # 3. 修复 Numpy 冲突并安装依赖 (解决 pip 安装失败)
+    # 3. 修复 Numpy 冲突并安装依赖
     # ==========================================
     - name: 安装依赖 (预装兼容版 Numpy)
       run: |
-        # 清理缓存
         pip cache purge
         pip install --upgrade pip
         
         # 【核心修复】先强制安装 numpy 1.21.6
-        # 这是 Python 3.9 + Paddle 2.6.x 在 macOS 上的最佳兼容版本
-        # 如果不先装这个，pip 会自动安装新版 numpy 导致 Paddle 安装失败
-        echo "🔧 正在安装兼容性 Numpy..."
+        echo "📦 正在安装兼容性 Numpy..."
         pip install "numpy<1.22"
         
         # 再安装 requirements.txt
@@ -85,7 +89,7 @@ jobs:
         path: dist_nuitka/商委订单审核助手服务端\ $Intel版$.app
 
   # ==========================================
-  # 测试环节
+  # 测试环节 (保持不变)
   # ==========================================
   test-on-clean-macos:
     name: 🧪 验证 Web 服务启动
@@ -100,20 +104,15 @@ jobs:
 
     - name: 启动服务并实时监控日志
       run: |
-        # 1. 找到 .app 文件
         APP_PATH=$(find ./downloaded-app -name "*.app" | head -n 1)
         echo "📦 找到应用: $APP_PATH"
         
-        # 2. 定位可执行文件
         EXEC_PATH="$APP_PATH/Contents/MacOS/main"
         chmod +x "$EXEC_PATH"
 
-        # 3. 后台启动服务
         "$EXEC_PATH" > server_output.log 2>&1 &
         echo "🚀 服务进程已启动，PID: $!"
 
-        # 4. 智能轮询检查 (最多等待 60 秒)
-        echo "⏳ 开始监控日志，等待服务就绪..."
         MAX_WAIT=60
         WAIT_UNTIL=$(($(date +%s) + MAX_WAIT))
         
@@ -124,13 +123,11 @@ jobs:
                 exit 1
             fi
 
-            # 检查成功标志
             if grep -q "Uvicorn running on http://127.0.0.1:5678" server_output.log; then
                 echo "✅ 服务启动成功！检测到目标日志。"
                 break
             fi
             
-            # 检查致命错误
             if grep -q "Library not loaded" server_output.log; then
                 echo "❌ 检测到动态库丢失错误。"
                 cat server_output.log
