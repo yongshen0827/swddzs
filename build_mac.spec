@@ -2,47 +2,47 @@
 
 import os
 import sys
-from PyInstaller.utils.hooks import collect_submodules, collect_data_files, collect_dynamic_libs, copy_metadata
+from PyInstaller.utils.hooks import collect_submodules, collect_data_files, collect_dynamic_libs
 
 block_cipher = None
 
 # ==================== 1. 隐藏导入（核心） ====================
 hiddenimports = [
-    # ----- Paddle 系列（OCR核心）-----
+    # ----- Paddle 系列 -----
     'paddle', 'paddle.fluid', 'paddle.fluid.core', 'paddle.fluid.core_avx',
     'paddle.incubate', 'paddle.distributed', 'paddle.dataset',
     'paddle.fluid.io', 'paddle.fluid.layers', 'paddle.fluid.param_attr',
     'paddleocr', 'paddlex', 'scipy._cyutility',
 
-    # ----- EasyOCR（备用）-----
+    # ----- EasyOCR -----
     'easyocr', 'easyocr.model.model', 'easyocr.detection', 'easyocr.recognition',
     'easyocr.utils', 'easyocr.config', 'easyocr.craft_utils', 'easyocr.imgproc',
 
-    # ----- PyTorch（EasyOCR 依赖）-----
+    # ----- PyTorch -----
     'torch', 'torchvision', 'torchvision._C', 'torchaudio',
 
-    # ----- OpenCV（图像处理）-----
+    # ----- OpenCV -----
     'cv2', 'cv2.cv2', 'cv2.data',
 
-    # ----- 科学计算库-----
+    # ----- 科学计算库 -----
     'numpy', 'numpy.core._dtype_ctypes', 'numpy.random._examples',
     'scipy', 'scipy.special._ufuncs', 'scipy.linalg._fblas',
-    'scipy.sparse.csgraph._validation', 'scipy._cyutility',
+    'scipy.sparse.csgraph._validation',
     'sklearn', 'sklearn.utils._weight_vector', 'sklearn.neighbors._typedefs',
     'skimage', 'skimage.io._plugins',
 
-    # ----- Web 框架（FastAPI + Uvicorn）-----
+    # ----- Web 框架 -----
     'uvicorn', 'uvicorn.loops', 'uvicorn.loops.auto',
     'uvicorn.protocols', 'uvicorn.protocols.http.auto',
     'fastapi', 'fastapi.openapi', 'fastapi.openapi.utils',
     'starlette', 'pydantic', 'pydantic.utils',
 
-    # ----- 文档处理（PDF + Excel）-----
+    # ----- 文档处理 -----
     'fitz', 'PyMuPDF', 'pdfplumber',
     'pdfminer', 'pdfminer.pdfparser', 'pdfminer.pdfdocument',
     'openpyxl', 'openpyxl.cell._writer',
 
-    # ----- 通用工具库-----
+    # ----- 通用工具 -----
     'yaml', 'lxml', 'lxml._elementpath', 'lxml.etree',
     'networkx', 'shapely', 'shapely.geometry',
     'visualdl', 'modelscope', 'pypdfium2', 'premailer', 'cssutils',
@@ -50,7 +50,7 @@ hiddenimports = [
     'babel.numbers', 'jinja2.ext',
     '_rapidfuzz_cpp', 'rapidfuzz',
 
-    # ----- 修复 jaraco/pkg_resources 缺失（上次崩溃的根源）-----
+    # ----- 修复 jaraco/pkg_resources 缺失 -----
     'pkg_resources',
     'pkg_resources.py2_warn',
     'pkg_resources._vendor',
@@ -67,7 +67,7 @@ hiddenimports = [
     'jaraco.text',
 ]
 
-# 自动收集子模块（减少手动遗漏）
+# 自动收集子模块
 hiddenimports += collect_submodules('paddleocr')
 hiddenimports += collect_submodules('paddle')
 hiddenimports += collect_submodules('paddlex')
@@ -84,19 +84,17 @@ hiddenimports += collect_submodules('modelscope')
 hiddenimports += collect_submodules('visualdl')
 hiddenimports += collect_submodules('pkg_resources._vendor')
 
-hiddenimports = list(set(hiddenimports))  # 去重
+hiddenimports = list(set(hiddenimports))
 
-# ==================== 2. 数据文件（模型 + 元数据） ====================
+# ==================== 2. 数据文件（模型） ====================
 datas = []
 
-# 打包 PaddleOCR 模型目录
 home = os.path.expanduser('~')
 paddle_model_dir = os.path.join(home, '.paddleocr')
 if os.path.exists(paddle_model_dir):
     datas.append((paddle_model_dir, '.paddleocr'))
     print(f"✅ 已添加 PaddleOCR 模型: {paddle_model_dir}")
 
-# 打包 EasyOCR 模型目录
 easy_model_dir = os.path.join(home, '.EasyOCR')
 if os.path.exists(easy_model_dir):
     datas.append((easy_model_dir, '.EasyOCR'))
@@ -111,18 +109,9 @@ datas += collect_data_files('torch')
 datas += collect_data_files('sklearn')
 datas += collect_data_files('pydantic')
 
-# 复制元数据（PaddleX 运行时检查依赖时需要）[reference:13]
-datas += copy_metadata('ftfy')
-datas += copy_metadata('imagesize')
-datas += copy_metadata('lxml')
-datas += copy_metadata('opencv-contrib-python')
-datas += copy_metadata('openpyxl')
-datas += copy_metadata('pyclipper')
-
 # ==================== 3. 二进制动态库 ====================
 binaries = []
 
-# 收集关键库的动态链接文件
 binaries += collect_dynamic_libs('paddle')
 binaries += collect_dynamic_libs('torch')
 binaries += collect_dynamic_libs('cv2')
@@ -146,15 +135,15 @@ try:
 except Exception as e:
     print(f"⚠️ 无法定位 Paddle 动态库目录: {e}")
 
-# ==================== 4. 排除项（减小体积） ====================
+# ==================== 4. 排除项 ====================
 excludes = [
     'tkinter', 'test', 'unittest', 'pytest', 'setuptools', 'pip',
     'IPython', 'jupyter', 'notebook', 'matplotlib.tests',
     'numpy.random._examples', 'pandas.tests',
-    'torch.cuda', 'torch.distributed',  # 不需要 GPU 相关模块
+    'torch.cuda', 'torch.distributed',
 ]
 
-# ==================== 5. Analysis（主分析） ====================
+# ==================== 5. Analysis ====================
 a = Analysis(
     ['main.py'],
     pathex=[],
@@ -173,7 +162,7 @@ a = Analysis(
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
-# ==================== 6. EXE（可执行文件） ====================
+# ==================== 6. EXE ====================
 exe = EXE(
     pyz,
     a.scripts,
@@ -181,7 +170,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='main',                     # 内部可执行文件名，英文避免路径问题
+    name='main',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -189,12 +178,12 @@ exe = EXE(
     console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
-    target_arch='x86_64',            # 指定 x86_64 架构
+    target_arch='x86_64',
     codesign_identity=None,
     entitlements_file=None,
 )
 
-# ==================== 7. COLLECT（收集所有文件） ====================
+# ==================== 7. COLLECT ====================
 coll = COLLECT(
     exe,
     a.binaries,
@@ -203,13 +192,13 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='OrderAuditApp',            # 内部收集目录名，英文
+    name='OrderAuditApp',
 )
 
-# ==================== 8. BUNDLE（生成 .app） ====================
+# ==================== 8. BUNDLE ====================
 app = BUNDLE(
     coll,
-    name='商委订单审核助手服务端.app',   # 最终用户看到的 .app 名称
+    name='商委订单审核助手服务端.app',
     icon=None,
     bundle_identifier='com.shangwei.order.audit',
     info_plist={
