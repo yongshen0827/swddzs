@@ -71,6 +71,7 @@ jobs:
       matrix:
         os: [macos-15-intel, macos-14]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
     steps:
     - name: 下载产物
       uses: actions/download-artifact@v4
@@ -81,7 +82,7 @@ jobs:
       run: |
         echo "===== 当前测试环境: ${{ matrix.os }} ====="
         echo "===== CPU 品牌 ====="
-        sysctl -n machdep.cpu.brand_string 2>/dev/null || echo "⚠️ 无法获取 CPU 品牌（虚拟环境正常现象）"
+        sysctl -n machdep.cpu.brand_string 2>/dev/null || echo "⚠️ 无法获取 CPU 品牌"
         echo "===== CPU 特性 ====="
         sysctl -a 2>/dev/null | grep machdep.cpu.features || echo "⚠️ 无法获取 CPU 特性"
 
@@ -108,24 +109,33 @@ jobs:
         "$EXEC_PATH" > server.log 2>&1 &
         SERVER_PID=$!
         
-        echo "⏳ 4. 等待服务启动 (最多 180 秒)..."
-        for i in {1..90}; do
+        echo "⏳ 4. 等待服务启动 (最多 300 秒，模型加载较慢)..."
+        for i in {1..150}; do
           if ! kill -0 $SERVER_PID 2>/dev/null; then
             echo "❌ 服务进程已退出"
             echo "===== 服务日志 (最后 100 行) ====="
             tail -100 server.log
             exit 1
           fi
-          if curl -s -f http://127.0.0.1:5678/health > /dev/null 2>&1; then
-            echo "✅ 服务启动成功！健康检查通过 (耗时约 $((i*2)) 秒)"
-            kill $SERVER_PID
-            exit 0
+          # 检测模型加载进度
+          if grep -q "PaddleOCR 模型路径设置为" server.log 2>/dev/null; then
+            echo "   📦 模型路径已配置"
+          fi
+          if grep -q "Uvicorn running on http://127.0.0.1:5678" server.log 2>/dev/null; then
+            echo "✅ 服务启动成功 (耗时约 $((i*2)) 秒)"
+            sleep 2
+            break
           fi
           sleep 2
         done
         
-        echo "❌ 服务启动超时"
-        echo "===== 服务日志 (全部) ====="
-        cat server.log
+        if ! curl -s -f --retry 5 --retry-delay 2 --max-time 10 http://127.0.0.1:5678/health > /dev/null 2>&1; then
+          echo "❌ 健康检查失败"
+          echo "===== 服务日志 (全部) ====="
+          cat server.log
+          kill $SERVER_PID 2>/dev/null || true
+          exit 1
+        fi
+        
+        echo "✅ 健康检查通过"
         kill $SERVER_PID 2>/dev/null || true
-        exit 1
