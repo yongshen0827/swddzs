@@ -1,10 +1,9 @@
-name: 打包 macOS 应用 (Intel 兼容版 - 手动编译 Python 终极修复)
+name: 打包 macOS 应用 (Intel 兼容版 - 排除 Torch 优化)
 
 on:
   workflow_dispatch:
 
 env:
-  # 定义全局变量，方便后续步骤使用
   PYTHON_VERSION: "3.9.25"
   GETTEXT_PATH: "/usr/local/opt/gettext"
 
@@ -22,41 +21,33 @@ jobs:
     - name: 安装 Homebrew 依赖
       run: |
         brew install gettext
-        # 强制链接，确保库文件在标准路径下
         brew link gettext --force
         echo "✅ Gettext 已安装并链接"
 
     # ==========================================
-    # 2. 【核心修复】手动编译安装 Python
-    # 替代 actions/setup-python，彻底解决动态库加载问题
+    # 2. 手动编译安装 Python (解决环境问题)
     # ==========================================
     - name: 编译并安装 Python (源码构建)
       run: |
-        # 1. 下载 Python 源码
         echo "📥 下载 Python ${{ env.PYTHON_VERSION }} 源码..."
         curl -O https://www.python.org/ftp/python/${{ env.PYTHON_VERSION }}/Python-${{ env.PYTHON_VERSION }}.tgz
         tar -xzf Python-${{ env.PYTHON_VERSION }}.tgz
         cd Python-${{ env.PYTHON_VERSION }}
 
-        # 2. 配置编译选项
-        # --prefix: 安装路径
-        # LDFLAGS/CPPFLAGS: 告诉编译器去哪里找 gettext 库
         echo "⚙️ 配置编译环境..."
         export LDFLAGS="-L${{ env.GETTEXT_PATH }}/lib"
         export CPPFLAGS="-I${{ env.GETTEXT_PATH }}/include"
         
         ./configure --prefix=/usr/local --enable-optimizations --with-ensurepip=install
-
-        # 3. 编译并安装
+        
         echo "🔨 开始编译 (这可能需要几分钟)..."
         make -j 4
-        sudo make altinstall # 使用 altinstall 防止覆盖系统默认 python3
+        sudo make altinstall
         
-        # 4. 验证安装
         echo "✅ 验证 Python 版本..."
         /usr/local/bin/python3.9 --version
         
-        # 5. 创建软链接方便使用
+        # 创建软链接
         sudo ln -sf /usr/local/bin/python3.9 /usr/local/bin/python
         sudo ln -sf /usr/local/bin/pip3.9 /usr/local/bin/pip
 
@@ -66,33 +57,35 @@ jobs:
     - name: 设置 Python 环境变量
       run: |
         echo "/usr/local/bin" >> $GITHUB_PATH
-        echo "✅ Python 路径已添加到环境变量"
 
     # ==========================================
     # 4. 安装项目依赖
     # ==========================================
-    - name: 安装依赖 (预装兼容版 Numpy)
+    - name: 安装依赖 (预装兼容版 Numpy 和 Torch)
       run: |
-        pip --version
         pip install --upgrade pip
         
         # 强制安装兼容版 Numpy
-        echo "📦 安装 Numpy..."
         pip install "numpy<1.22"
+        
+        # 安装 PyTorch (CPU 版本即可，或者你需要 MPS 版本请自行调整)
+        # 这里使用官方推荐的稳定版链接
+        pip install torch torchvision torchaudio
         
         # 安装其他依赖
         if [ -f requirements.txt ]; then
           pip install -r requirements.txt
         fi
         
-        # 安装打包工具
         pip install nuitka
 
     # ==========================================
-    # 5. 执行打包
+    # 5. 执行 Nuitka 打包 (关键修改：排除 Torch)
     # ==========================================
     - name: 执行 Nuitka 打包
       run: |
+        # 使用 --nofollow-import-to 告诉 Nuitka 不要碰 torch 和 numpy
+        # 这样可以避免编译数小时甚至卡死
         python -m nuitka \
           --standalone \
           --macos-create-app-bundle \
@@ -101,7 +94,44 @@ jobs:
           --jobs=2 \
           --output-dir=dist_nuitka \
           --remove-output \
+          --nofollow-import-to=torch \
+          --nofollow-import-to=numpy \
+          --nofollow-import-to=PIL \
           main.py
+
+    # ==========================================
+    # 6. 手动注入 Torch 和 Numpy (关键修复)
+    # ==========================================
+    - name: 手动复制 Torch 和 Numpy 到包内
+      run: |
+        echo "🔧 正在手动注入 Torch 和 Numpy..."
+        
+        # 定位打包生成的 .app 目录
+        APP_PATH=$(find dist_nuitka -name "*.app" | head -n 1)
+        LIB_PATH="$APP_PATH/Contents/MacOS" # Nuitka standalone 模式下，库通常放在这里或同级
+        
+        # 找到 Python 环境的 site-packages
+        SITE_PACKAGES=$(python -c "import site; print(site.getsitepackages()[0])")
+        
+        # 复制 torch
+        echo "📦 复制 torch..."
+        cp -r "$SITE_PACKAGES/torch" "$LIB_PATH/"
+        
+        # 复制 numpy
+        echo "📦 复制 numpy..."
+        cp -r "$SITE_PACKAGES/numpy" "$LIB_PATH/"
+        
+        # 复制 PIL (Pillow) - 如果用了图像处理
+        if [ -d "$SITE_PACKAGES/PIL" ]; then
+            cp -r "$SITE_PACKAGES/PIL" "$LIB_PATH/"
+        fi
+        
+        # 复制 torchvision (如果用了)
+        if [ -d "$SITE_PACKAGES/torchvision" ]; then
+            cp -r "$SITE_PACKAGES/torchvision" "$LIB_PATH/"
+        fi
+
+        echo "✅ 库注入完成"
 
     - name: 上传 Nuitka 产物
       uses: actions/upload-artifact@v4
@@ -153,5 +183,6 @@ jobs:
             echo "✅ 接口响应正常 (HTTP $HTTP_CODE)"
         else
             echo "❌ 接口异常 (HTTP $HTTP_CODE)"
+            cat server_output.log
             exit 1
         fi
