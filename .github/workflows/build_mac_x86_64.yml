@@ -24,17 +24,25 @@ jobs:
         auto-activate-base: false
         conda-solver: libmamba
 
-    - name: 安装 PaddlePaddle (强制 x86_64 wheel)
+    - name: 下载并安装 PaddlePaddle (强制 x86_64 wheel)
       uses: nick-fields/retry@v2
       with:
         timeout_minutes: 5
         max_attempts: 3
         retry_on: error
         command: |
-          # 关键命令：使用百度官方镜像源，并指定 macOS x86_64 平台
-          pip install --platform macosx_10_9_x86_64 --only-binary=:all: \
-            --index-url https://mirror.baidu.com/pypi/simple \
+          # 第一步：使用 pip download 下载指定平台的 wheel 到 /tmp/paddle_wheel 目录
+          # 注意：必须使用 --only-binary=:all: --no-deps 确保只下载主包
+          pip download \
+            --platform macosx_10_9_x86_64 \
+            --only-binary=:all: \
+            --no-deps \
+            --dest /tmp/paddle_wheel \
             paddlepaddle==2.6.2
+          
+          # 第二步：从下载的 wheel 文件直接安装
+          # 注意：下载的文件名精确，应直接使用，避免通配符报错
+          pip install /tmp/paddle_wheel/paddlepaddle-2.6.2-cp39-cp39-macosx_10_9_x86_64.whl
 
     - name: 安装其余项目依赖
       uses: nick-fields/retry@v2
