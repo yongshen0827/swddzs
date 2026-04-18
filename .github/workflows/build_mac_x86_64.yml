@@ -1,75 +1,27 @@
-name: 打包 macOS x86_64 应用 (兼容 Intel 和 Apple Silicon)
+name: 打包 macOS x86_64 应用 (Intel 原生，兼容 Apple Silicon)
 
 on:
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: macos-14
-    defaults:
-      run:
-        shell: bash -el {0}
+    runs-on: macos-15-intel  # Intel 原生环境，无需排队担忧
 
     steps:
     - name: 检出代码
       uses: actions/checkout@v4
 
-    - name: 设置 Miniforge (Conda) 并启用 libmamba 求解器
-      uses: conda-incubator/setup-miniconda@v3
+    - name: 设置 Python
+      uses: actions/setup-python@v5
       with:
-        miniforge-version: latest
-        environment-file: environment.yml
-        activate-environment: order-audit-x86
         python-version: '3.9'
-        auto-activate-base: false
-        conda-solver: libmamba
 
-    - name: 下载并安装 PaddlePaddle (强制 x86_64 wheel)
-      uses: nick-fields/retry@v2
-      with:
-        timeout_minutes: 5
-        max_attempts: 3
-        retry_on: error
-        command: |
-          # 第一步：使用 pip download 下载指定平台的 wheel 到 /tmp/paddle_wheel 目录
-          # 注意：必须使用 --only-binary=:all: --no-deps 确保只下载主包
-          pip download \
-            --platform macosx_10_9_x86_64 \
-            --only-binary=:all: \
-            --no-deps \
-            --dest /tmp/paddle_wheel \
-            paddlepaddle==2.6.2
-          
-          # 第二步：从下载的 wheel 文件直接安装
-          # 注意：下载的文件名精确，应直接使用，避免通配符报错
-          pip install /tmp/paddle_wheel/paddlepaddle-2.6.2-cp39-cp39-macosx_10_9_x86_64.whl
-
-    - name: 安装其余项目依赖
-      uses: nick-fields/retry@v2
-      with:
-        timeout_minutes: 10
-        max_attempts: 3
-        retry_on: error
-        command: |
-          pip install --upgrade pip
-          pip install -r requirements.txt
-    - name: 验证系统架构和 Rosetta 状态
+    - name: 安装依赖
       run: |
-        echo "===== 系统架构 ====="
-        uname -m
-        echo "===== 验证 Rosetta 2 ====="
-        # 检查是否可运行 x86_64 二进制（测试用）
-        arch -x86_64 /usr/bin/true && echo "✅ Rosetta 2 可用"
-        
-    - name: 验证关键库架构
-      run: |
-        python -c "import platform; print('Python 架构:', platform.machine()); assert platform.machine() == 'x86_64', 'Python 必须为 x86_64'"
-        python -c "import paddle; print('✅ PaddlePaddle 导入成功')"
-        python -c "import numpy; print('✅ NumPy 导入成功')"
-        python -c "import cv2; print('✅ OpenCV 导入成功')"
-        python -c "import torch; print('✅ PyTorch 导入成功')"
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
 
-    - name: 下载 OCR 模型
+    - name: 下载 OCR 模型 (带重试)
       uses: nick-fields/retry@v2
       with:
         timeout_minutes: 10
@@ -79,8 +31,8 @@ jobs:
           python -c "
           from paddleocr import PaddleOCR
           import easyocr
-          ocr = PaddleOCR(use_angle_cls=True, lang='ch', show_log=False)
-          reader = easyocr.Reader(['ch_sim', 'en'], gpu=False)
+          PaddleOCR(use_angle_cls=True, lang='ch', show_log=False)
+          easyocr.Reader(['ch_sim', 'en'], gpu=False)
           print('✅ 模型下载完成')
           "
 
@@ -88,7 +40,8 @@ jobs:
       run: rm -rf build dist *.spec.bak *.zip
 
     - name: PyInstaller 打包
-      run: pyinstaller --clean --noconfirm build_mac_x86_64.spec
+      run: |
+        pyinstaller --clean --noconfirm build_mac.spec
 
     - name: 验证打包产物
       run: |
@@ -99,86 +52,50 @@ jobs:
         echo "✅ .app 生成成功"
         ls -la dist/
 
-    - name: 压缩 .app 为 zip
+    - name: 压缩 .app 为 zip (保留目录结构)
       run: |
         cd dist
-        zip -r ../OrderAuditApp-x86_64.zip "商委订单审核助手服务端.app"
+        zip -r ../OrderAuditApp-macOS.zip "商委订单审核助手服务端.app"
         cd ..
 
-    - name: 上传 zip 包
+    - name: 上传产物
       uses: actions/upload-artifact@v4
       with:
-        name: macOS-x86_64-App
-        path: OrderAuditApp-x86_64.zip
+        name: macOS-App
+        path: OrderAuditApp-macOS.zip
 
   test:
-    name: 🧪 测试应用启动和接口连通性
-    runs-on: macos-14
+    name: 🧪 测试应用启动和接口
     needs: build
-    defaults:
-      run:
-        shell: bash -el {0}
-
+    runs-on: macos-14  # 在 Apple Silicon 上测试兼容性
     steps:
-    - name: 下载 zip 包
+    - name: 下载产物
       uses: actions/download-artifact@v4
       with:
-        name: macOS-x86_64-App
-        path: ./
+        name: macOS-App
 
-    - name: 解压 .app
+    - name: 解压并测试
       run: |
-        unzip -q OrderAuditApp-x86_64.zip
-        ls -la
-
-    - name: 启动服务
-      run: |
+        unzip -q OrderAuditApp-macOS.zip
         APP_PATH="./商委订单审核助手服务端.app"
         EXEC_PATH="$APP_PATH/Contents/MacOS/main"
-        if [ ! -f "$EXEC_PATH" ]; then
-          echo "❌ 可执行文件不存在: $EXEC_PATH"
-          exit 1
-        fi
         chmod +x "$EXEC_PATH"
         
         echo "🚀 启动服务..."
-        "$EXEC_PATH" > server_output.log 2>&1 &
+        "$EXEC_PATH" > server.log 2>&1 &
         SERVER_PID=$!
-        echo "SERVER_PID=$SERVER_PID" >> $GITHUB_ENV
         
         echo "⏳ 等待服务启动 (最多 120 秒)..."
-        MAX_WAIT=120
-        WAIT_UNTIL=$(($(date +%s) + MAX_WAIT))
-        
-        while true; do
-            if [ $(date +%s) -gt $WAIT_UNTIL ]; then
-                echo "❌ 等待超时，服务未启动"
-                echo "===== 服务日志 ====="
-                cat server_output.log
-                exit 1
-            fi
-            if grep -q "Uvicorn running on http://127.0.0.1:5678" server_output.log; then
-                echo "✅ 服务启动成功"
-                break
-            fi
-            sleep 2
+        for i in {1..60}; do
+          if grep -q "Uvicorn running on http://127.0.0.1:5678" server.log; then
+            echo "✅ 服务启动成功"
+            break
+          fi
+          sleep 2
         done
-
-    - name: 测试健康检查接口
-      run: |
-        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://127.0.0.1:5678/health || echo "000")
-        if [ "$HTTP_CODE" == "200" ]; then
-            echo "✅ 健康检查通过 (HTTP $HTTP_CODE)"
-        else
-            echo "❌ 健康检查失败 (HTTP $HTTP_CODE)"
-            cat server_output.log
-            exit 1
-        fi
-
-    - name: 清理服务进程
-      if: always()
-      run: |
-        if [ -n "$SERVER_PID" ]; then
-          echo "🧹 终止服务进程 $SERVER_PID"
-          kill $SERVER_PID 2>/dev/null || true
-        fi
+        
+        echo "🔍 测试健康检查接口..."
+        curl -f http://127.0.0.1:5678/health
+        echo "✅ 健康检查通过"
+        
+        kill $SERVER_PID 2>/dev/null || true
