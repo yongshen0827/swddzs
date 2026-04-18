@@ -81,41 +81,35 @@ jobs:
         EXEC_PATH="$APP_PATH/Contents/MacOS/main"
         chmod +x "$EXEC_PATH"
         
-        echo "===== 检查可执行文件架构 ====="
+        echo "===== 1. 检查可执行文件架构 ====="
         file "$EXEC_PATH"
         
-        echo "===== 检查依赖动态库 ====="
-        otool -L "$EXEC_PATH" | head -20
+        echo "===== 2. 检查依赖动态库 ====="
+        otool -L "$EXEC_PATH" | head -30
         
-        echo "🚀 启动服务 (后台运行，日志实时输出)..."
-        # 使用 `script` 命令捕获完整输出，避免缓冲问题
-        script -q server.log "$EXEC_PATH" &
+        echo "===== 3. 列出打包的模型文件 ====="
+        ls -la "$APP_PATH/Contents/Resources/.paddleocr" 2>/dev/null || echo "⚠️ 未找到 .paddleocr 目录"
+        ls -la "$APP_PATH/Contents/Resources/.EasyOCR" 2>/dev/null || echo "⚠️ 未找到 .EasyOCR 目录"
+        
+        echo "🚀 4. 启动服务（实时输出日志）..."
+        # 使用 unbuffer 方式直接运行，日志实时打印到终端
+        "$EXEC_PATH" 2>&1 &
         SERVER_PID=$!
         
-        echo "⏳ 等待服务启动 (最多 180 秒，首次加载模型可能较慢)..."
+        echo "⏳ 等待服务启动 (最多 180 秒)..."
         for i in {1..90}; do
-          if grep -q "Uvicorn running on http://127.0.0.1:5678" server.log; then
-            echo "✅ 服务启动成功 (耗时约 $((i*2)) 秒)"
+          if ! kill -0 $SERVER_PID 2>/dev/null; then
+            echo "❌ 服务进程已退出 (退出码: $?)"
             break
           fi
-          if ! kill -0 $SERVER_PID 2>/dev/null; then
-            echo "❌ 服务进程意外退出"
-            echo "===== 服务日志 (最后50行) ====="
-            tail -50 server.log
-            exit 1
+          if curl -s -f http://127.0.0.1:5678/health > /dev/null 2>&1; then
+            echo "✅ 服务启动成功！健康检查通过。"
+            kill $SERVER_PID
+            exit 0
           fi
           sleep 2
         done
         
-        if ! grep -q "Uvicorn running" server.log; then
-          echo "❌ 服务启动超时"
-          echo "===== 服务日志 (全部) ====="
-          cat server.log
-          exit 1
-        fi
-        
-        echo "🔍 测试健康检查接口..."
-        curl --retry 5 --retry-delay 2 -f http://127.0.0.1:5678/health
-        echo "✅ 健康检查通过"
-        
+        echo "❌ 服务启动失败，终止进程并输出剩余日志..."
         kill $SERVER_PID 2>/dev/null || true
+        exit 1
