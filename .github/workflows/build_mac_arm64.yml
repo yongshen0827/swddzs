@@ -11,19 +11,46 @@ jobs:
     - name: 检出代码
       uses: actions/checkout@v4
 
-    - name: 设置 Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.9'
-
-    - name: 安装依赖
+    - name: 设置 Python（强制 ARM64）
       run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
+        # 确保使用 ARM64 原生 Python
+        arch -arm64 python3 --version
+        # 创建 ARM64 专用虚拟环境
+        arch -arm64 python3 -m venv venv
+        source venv/bin/activate
+        echo "VIRTUAL_ENV=$PWD/venv" >> $GITHUB_ENV
+        echo "$PWD/venv/bin" >> $GITHUB_PATH
+
+    - name: 升级 pip 并安装依赖（强制 ARM64 架构）
+      run: |
+        source venv/bin/activate
+        arch -arm64 pip install --upgrade pip setuptools wheel
+        
+        # 关键：强制 numpy/scipy 使用 ARM64 原生 wheel
+        arch -arm64 pip install --only-binary=:all: numpy==1.26.4
+        arch -arm64 pip install --only-binary=:all: scipy==1.13.1
+        
+        # 安装其他依赖（全部使用 ARM64 架构）
+        arch -arm64 pip install -r requirements.txt
+
+    - name: 验证所有关键库的架构
+      run: |
+        source venv/bin/activate
+        echo "===== 验证 Python 架构 ====="
+        python -c "import platform; print('Python 架构:', platform.machine()); assert platform.machine() == 'arm64', 'Python 不是 ARM64！'"
+        
+        echo "===== 验证 NumPy 架构 ====="
+        python -c "import numpy; import subprocess; result=subprocess.run(['file', numpy.__file__.replace('__init__.py', 'core/_multiarray_umath.cpython-39-darwin.so')], capture_output=True, text=True); print(result.stdout)"
+        
+        echo "===== 验证关键动态库架构 ====="
+        find venv/lib -name "*.dylib" -o -name "*.so" | while read lib; do
+          file "$lib" | grep -q "arm64" || echo "⚠️ 非 ARM64 库: $lib"
+        done
 
     - name: 下载 OCR 模型
       run: |
-        python -c "
+        source venv/bin/activate
+        arch -arm64 python -c "
         from paddleocr import PaddleOCR
         import easyocr
         ocr = PaddleOCR(use_angle_cls=True, lang='ch', show_log=False)
@@ -37,7 +64,8 @@ jobs:
 
     - name: PyInstaller 打包
       run: |
-        pyinstaller --clean --noconfirm build_mac_arm64.spec
+        source venv/bin/activate
+        arch -arm64 pyinstaller --clean --noconfirm build_mac_arm64.spec
 
     - name: 验证打包产物
       run: |
