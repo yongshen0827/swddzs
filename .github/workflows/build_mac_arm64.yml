@@ -39,20 +39,30 @@ jobs:
       run: |
         pyinstaller --clean --noconfirm build_mac_arm64.spec
 
-    - name: 验证打包产物是否存在
+    - name: 验证打包产物结构
       run: |
-        if [ ! -d "dist/商委订单审核助手服务端.app" ]; then
-          echo "❌ .app 未生成"
+        echo "===== dist 目录内容 ====="
+        ls -la dist/
+        echo ""
+        APP_PATH="dist/商委订单审核助手服务端.app"
+        if [ -d "$APP_PATH" ]; then
+          echo "✅ .app 目录存在"
+          echo "===== .app 内部结构 ====="
+          ls -la "$APP_PATH/"
+          echo "===== Contents/MacOS 内容 ====="
+          ls -la "$APP_PATH/Contents/MacOS/"
+        else
+          echo "❌ .app 目录不存在"
           exit 1
         fi
-        echo "✅ .app 生成成功"
-        ls -la dist/
 
-    - name: 上传打包产物（供测试使用）
+    - name: 上传打包产物（保留 .app 目录）
       uses: actions/upload-artifact@v4
       with:
         name: macOS-ARM64-App
         path: dist/商委订单审核助手服务端.app
+        # 确保保留父目录，不加尾部斜杠
+
   test:
     name: 🧪 测试应用启动和接口连通性
     runs-on: macos-14
@@ -65,36 +75,30 @@ jobs:
         name: macOS-ARM64-App
         path: ./downloaded-app
 
-    - name: 探查下载的目录结构（调试用）
+    - name: 探查下载目录结构（调试）
       run: |
-        echo "===== 下载目录内容 ====="
+        echo "===== downloaded-app 目录 ====="
         ls -la ./downloaded-app
-        echo ""
-        echo "===== 递归列出所有文件 ====="
-        find ./downloaded-app -type f | head -50
         echo ""
         echo "===== 查找 .app 目录 ====="
         find ./downloaded-app -name "*.app" -type d
 
     - name: 启动服务并实时监控日志
       run: |
-        # 先找 .app 目录
-        APP_PATH=$(find ./downloaded-app -name "*.app" -type d | head -n 1)
-        if [ -z "$APP_PATH" ]; then
+        # 直接使用固定路径，因为 artifact 解压后应保留 "商委订单审核助手服务端.app" 目录
+        APP_PATH="./downloaded-app/商委订单审核助手服务端.app"
+        if [ ! -d "$APP_PATH" ]; then
           echo "❌ 未找到 .app 包，请检查上方目录结构"
           exit 1
         fi
         echo "✅ 找到 .app: $APP_PATH"
         
-        # 查找可执行文件（可能叫 main 或其他名字）
-        EXEC_PATH=$(find "$APP_PATH" -name "main" -o -name "商委订单审核助手服务端" | head -n 1)
-        if [ -z "$EXEC_PATH" ]; then
-          # 如果找不到，列出 Contents/MacOS 内容
-          echo "⚠️ 未找到可执行文件，列出 Contents/MacOS 内容:"
+        EXEC_PATH="$APP_PATH/Contents/MacOS/main"
+        if [ ! -f "$EXEC_PATH" ]; then
+          echo "⚠️ 可执行文件 main 不存在，尝试列出 Contents/MacOS:"
           ls -la "$APP_PATH/Contents/MacOS/"
           exit 1
         fi
-        echo "✅ 可执行文件: $EXEC_PATH"
         chmod +x "$EXEC_PATH"
         
         echo "🚀 启动服务..."
