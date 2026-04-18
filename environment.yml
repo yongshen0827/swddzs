@@ -1,4 +1,4 @@
-name: order-audit
+name: order-audit-x86
 channels:
   - conda-forge
   - defaults
