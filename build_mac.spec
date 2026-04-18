@@ -92,15 +92,6 @@ hiddenimports = list(set(hiddenimports))
 
 # ==================== 2. 数据文件（模型） ====================
 datas = []
-# 收集 Cython 的 Utility 文件
-try:
-    import Cython.Utils
-    cython_utility_dir = os.path.join(os.path.dirname(Cython.__file__), 'Utility')
-    if os.path.exists(cython_utility_dir):
-        datas.append((cython_utility_dir, 'Cython/Utility'))
-        print(f"✅ 已添加 Cython Utility 目录: {cython_utility_dir}")
-except Exception as e:
-    print(f"⚠️ 无法收集 Cython Utility: {e}")
     
 home = os.path.expanduser('~')
 paddle_model_dir = os.path.join(home, '.paddleocr')
@@ -113,6 +104,17 @@ if os.path.exists(easy_model_dir):
     datas.append((easy_model_dir, '.EasyOCR'))
     print(f"✅ 已添加 EasyOCR 模型: {easy_model_dir}")
 
+# 收集 Cython 的 Utility 文件
+try:
+    import Cython
+    cython_utility_dir = os.path.join(os.path.dirname(Cython.__file__), 'Utility')
+    if os.path.exists(cython_utility_dir):
+        datas.append((cython_utility_dir, 'Cython/Utility'))
+        print(f"✅ 已添加 Cython Utility 目录: {cython_utility_dir}")
+except Exception as e:
+    print(f"⚠️ 无法收集 Cython Utility: {e}")
+
+
 # 收集库自带的数据文件
 datas += collect_data_files('paddleocr')
 datas += collect_data_files('paddlex')
@@ -122,6 +124,8 @@ datas += collect_data_files('torch')
 datas += collect_data_files('sklearn')
 datas += collect_data_files('pydantic')
 datas += collect_data_files('setuptools')
+# 收集 Cython 编译器数据文件
+datas += collect_data_files('Cython')
 
 # ==================== 3. 二进制动态库 ====================
 binaries = []
