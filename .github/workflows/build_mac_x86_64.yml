@@ -74,25 +74,45 @@ jobs:
       with:
         name: macOS-App
 
-    - name: 解压并测试
+    - name: 解压并诊断启动
       run: |
         unzip -q OrderAuditApp-macOS.zip
         APP_PATH="./商委订单审核助手服务端.app"
         EXEC_PATH="$APP_PATH/Contents/MacOS/main"
         chmod +x "$EXEC_PATH"
         
-        echo "🚀 启动服务..."
-        "$EXEC_PATH" > server.log 2>&1 &
+        echo "===== 检查可执行文件架构 ====="
+        file "$EXEC_PATH"
+        
+        echo "===== 检查依赖动态库 ====="
+        otool -L "$EXEC_PATH" | head -20
+        
+        echo "🚀 启动服务 (后台运行，日志实时输出)..."
+        # 使用 `script` 命令捕获完整输出，避免缓冲问题
+        script -q server.log "$EXEC_PATH" &
         SERVER_PID=$!
         
-        echo "⏳ 等待服务启动 (最多 120 秒)..."
-        for i in {1..60}; do
+        echo "⏳ 等待服务启动 (最多 180 秒，首次加载模型可能较慢)..."
+        for i in {1..90}; do
           if grep -q "Uvicorn running on http://127.0.0.1:5678" server.log; then
-            echo "✅ 服务启动成功"
+            echo "✅ 服务启动成功 (耗时约 $((i*2)) 秒)"
             break
+          fi
+          if ! kill -0 $SERVER_PID 2>/dev/null; then
+            echo "❌ 服务进程意外退出"
+            echo "===== 服务日志 (最后50行) ====="
+            tail -50 server.log
+            exit 1
           fi
           sleep 2
         done
+        
+        if ! grep -q "Uvicorn running" server.log; then
+          echo "❌ 服务启动超时"
+          echo "===== 服务日志 (全部) ====="
+          cat server.log
+          exit 1
+        fi
         
         echo "🔍 测试健康检查接口..."
         curl --retry 5 --retry-delay 2 -f http://127.0.0.1:5678/health
