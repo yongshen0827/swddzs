@@ -1,4 +1,4 @@
-name: 打包 macOS 应用 (M1/M2/M3/M4 原生版)
+name: 打包 macOS 应用 (M1/M2/M3/M4 原生版-退回intle)
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
 jobs:
   build:
     # 强制使用 macOS 14 (Sonoma) - ARM64 架构
-    runs-on: macos-14
+    runs-on: macos-13
     
     steps:
     - name: 检出代码
@@ -16,8 +16,7 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: '3.9'
-        architecture: 'arm64'
-
+        
     - name: 安装依赖
       run: |
         pip install --upgrade pip
