@@ -1,4 +1,4 @@
-name: 打包 macOS ARM64 应用 (Conda + Pip)
+name: 打包 macOS x86_64 应用 (兼容 Intel 和 Apple Silicon)
 
 on:
   workflow_dispatch:
@@ -8,7 +8,7 @@ jobs:
     runs-on: macos-14
     defaults:
       run:
-        shell: bash -el {0}   # 必须，使 conda activate 生效
+        shell: bash -el {0}
 
     steps:
     - name: 检出代码
@@ -18,32 +18,42 @@ jobs:
       uses: conda-incubator/setup-miniconda@v3
       with:
         miniforge-version: latest
-        # 使用精简的环境文件，只包含 Python 和 pip
         environment-file: environment.yml
-        activate-environment: order-audit
+        activate-environment: order-audit-x86
         python-version: '3.9'
         auto-activate-base: false
-        # 关键：启用内置的 libmamba 求解器，稳定且快速
         conda-solver: libmamba
 
-    - name: 显示环境信息 (验证架构)
-      run: |
-        conda info
-        conda list
-        python -c "import platform; print('Python arch:', platform.machine()); assert platform.machine() == 'arm64'"
+    - name: 安装 PaddlePaddle (官方 x86_64 wheel)
+      uses: nick-fields/retry@v2
+      with:
+        timeout_minutes: 5
+        max_attempts: 3
+        retry_on: error
+        command: |
+          # 官方仅提供 x86_64 版本，在 Rosetta 环境下可直接安装
+          pip install paddlepaddle==2.6.2
 
-    - name: 使用 pip 安装项目依赖 (带重试)
+    - name: 安装其余项目依赖
       uses: nick-fields/retry@v2
       with:
         timeout_minutes: 10
         max_attempts: 3
         retry_on: error
         command: |
-          # 现在，所有依赖都由 pip 来安装，这极大地减轻了 conda 的求解负担
           pip install --upgrade pip
           pip install -r requirements.txt
 
-    - name: 下载 OCR 模型 (带重试)
+    - name: 验证关键库架构
+      run: |
+        python -c "import paddle; print('PaddlePaddle OK')"
+        python -c "import numpy; print('NumPy OK')"
+        python -c "import cv2; print('OpenCV OK')"
+        python -c "import torch; print('PyTorch OK')"
+        # 确认当前 Python 环境为 x86_64
+        python -c "import platform; print('Python 架构:', platform.machine())"
+
+    - name: 下载 OCR 模型
       uses: nick-fields/retry@v2
       with:
         timeout_minutes: 10
@@ -59,12 +69,10 @@ jobs:
           "
 
     - name: 清理旧构建
-      run: |
-        rm -rf build dist *.spec.bak *.zip
+      run: rm -rf build dist *.spec.bak *.zip
 
     - name: PyInstaller 打包
-      run: |
-        pyinstaller --clean --noconfirm build_mac_arm64.spec
+      run: pyinstaller --clean --noconfirm build_mac_x86_64.spec
 
     - name: 验证打包产物
       run: |
@@ -78,14 +86,14 @@ jobs:
     - name: 压缩 .app 为 zip
       run: |
         cd dist
-        zip -r ../OrderAuditApp.zip "商委订单审核助手服务端.app"
+        zip -r ../OrderAuditApp-x86_64.zip "商委订单审核助手服务端.app"
         cd ..
 
     - name: 上传 zip 包
       uses: actions/upload-artifact@v4
       with:
-        name: macOS-ARM64-App
-        path: OrderAuditApp.zip
+        name: macOS-x86_64-App
+        path: OrderAuditApp-x86_64.zip
 
   test:
     name: 🧪 测试应用启动和接口连通性
@@ -99,12 +107,12 @@ jobs:
     - name: 下载 zip 包
       uses: actions/download-artifact@v4
       with:
-        name: macOS-ARM64-App
+        name: macOS-x86_64-App
         path: ./
 
     - name: 解压 .app
       run: |
-        unzip -q OrderAuditApp.zip
+        unzip -q OrderAuditApp-x86_64.zip
         ls -la
 
     - name: 启动服务
@@ -122,7 +130,7 @@ jobs:
         SERVER_PID=$!
         echo "SERVER_PID=$SERVER_PID" >> $GITHUB_ENV
         
-        echo "⏳ 等待服务启动 (最多 120 秒，首次加载模型较慢)..."
+        echo "⏳ 等待服务启动 (最多 120 秒)..."
         MAX_WAIT=120
         WAIT_UNTIL=$(($(date +%s) + MAX_WAIT))
         
