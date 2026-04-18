@@ -53,8 +53,7 @@ jobs:
       with:
         name: macOS-ARM64-App
         path: dist/商委订单审核助手服务端.app
-
-     test:
+  test:
     name: 🧪 测试应用启动和接口连通性
     runs-on: macos-14
     needs: build
