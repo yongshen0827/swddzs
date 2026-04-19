@@ -89,7 +89,7 @@ jobs:
 
     - name: 解压并测试
       run: |
-        set +e   # 允许命令失败而不立即退出脚本
+        set +e
         
         unzip -q OrderAuditApp-macOS.zip
         APP_PATH="./商委订单审核助手服务端.app"
@@ -105,31 +105,24 @@ jobs:
         echo "----------------------------------------------"
         uname -m
         file "$EXEC_PATH"
-        arch -arm64 echo "   ✅ 当前 shell 运行于 ARM64 模式"
         
         echo ""
         echo "🔍 2. 动态库依赖分析"
         echo "----------------------------------------------"
         otool -L "$EXEC_PATH" | head -20
         if [ -d "$APP_PATH/Contents/MacOS/paddle/libs" ]; then
-          echo "   📦 Paddle libs 目录内容:"
+          echo "   ✅ Paddle libs 目录存在:"
           ls -la "$APP_PATH/Contents/MacOS/paddle/libs" | head -10
         else
-          echo "   ⚠️ 未找到 paddle/libs 目录"
-          ls -la "$APP_PATH/Contents/MacOS/paddle" 2>/dev/null || echo "   (paddle 目录不存在)"
+          echo "   ⚠️ 未找到 paddle/libs 目录，尝试查找其他位置:"
+          find "$APP_PATH" -name "libpaddle*.dylib" 2>/dev/null | head -5
         fi
         
         echo ""
-        echo "🔍 3. PyInstaller 资源目录结构"
-        echo "----------------------------------------------"
-        ls -la "$APP_PATH/Contents/MacOS/_internal" 2>/dev/null | head -20 || echo "   (无 _internal 目录)"
-        
-        echo ""
         echo "=============================================="
-        echo "🚀 4. 启动服务"
+        echo "🚀 3. 启动服务"
         echo "=============================================="
         
-        # 设置完整的环境变量
         export MKL_DEBUG_CPU_TYPE=5
         export MKL_ENABLE_INSTRUCTIONS=SSE4_2
         export OPENBLAS_NUM_THREADS=1
@@ -139,8 +132,9 @@ jobs:
         export KMP_DUPLICATE_LIB_OK=TRUE
         export FLAGS_use_mkldnn=0
         export PADDLE_USE_MPS=0
+        export PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=1
         
-        # 动态库路径注入
+        # 动态库路径（如果存在则注入）
         PADDLE_LIBS_PATH="$APP_PATH/Contents/MacOS/paddle/libs"
         if [ -d "$PADDLE_LIBS_PATH" ]; then
           export DYLD_LIBRARY_PATH="$PADDLE_LIBS_PATH:$DYLD_LIBRARY_PATH"
@@ -148,16 +142,10 @@ jobs:
           echo "   ✅ Paddle 动态库路径已设置: $PADDLE_LIBS_PATH"
         fi
         
-        echo "   🌍 当前环境变量:"
-        echo "      DYLD_LIBRARY_PATH=$DYLD_LIBRARY_PATH"
-        echo "      DYLD_FALLBACK_LIBRARY_PATH=$DYLD_FALLBACK_LIBRARY_PATH"
-        
-        # 启动服务，同时捕获 stdout 和 stderr
         "$EXEC_PATH" > server.log 2>&1 &
         SERVER_PID=$!
         echo "   📌 进程 PID: $SERVER_PID"
         
-        # 短暂等待后检查进程是否存在
         sleep 3
         if ! kill -0 $SERVER_PID 2>/dev/null; then
           echo ""
@@ -173,19 +161,15 @@ jobs:
           if ! kill -0 $SERVER_PID 2>/dev/null; then
             echo ""
             echo "❌ 服务进程意外退出 (第 ${i} 次检查)，最后 200 行日志:"
-            echo "----------------------------------------------"
             tail -200 server.log
-            echo "----------------------------------------------"
             exit 1
           fi
           
-          # 每 10 秒打印一次进度
           if [ $((i % 10)) -eq 0 ]; then
             echo "   [${i}] 最新 3 行日志:"
             tail -3 server.log
           fi
           
-          # 健康检查
           if curl -s -f http://127.0.0.1:5678/health > /dev/null 2>&1; then
             echo ""
             echo "✅ 服务启动成功！健康检查通过 (耗时约 $((i*2)) 秒)"
@@ -205,12 +189,10 @@ jobs:
         
         echo ""
         echo "=============================================="
-        echo "📄 5. 服务运行日志摘要"
+        echo "📄 4. 服务运行日志摘要"
         echo "=============================================="
-        echo "   (最后 50 行)"
         tail -50 server.log
         
-        # 优雅终止
         kill $SERVER_PID 2>/dev/null || true
         echo ""
         echo "🎉 测试完成"
