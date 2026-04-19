@@ -172,6 +172,11 @@ excludes = [
     'IPython', 'jupyter', 'notebook', 'matplotlib.tests',
     'numpy.random._examples', 'pandas.tests',
     'torch.cuda', 'torch.distributed',
+    # 新增：阻止 Cython 和编译工具链的导入
+    'Cython', 'Cython.Compiler', 'Cython.Compiler.Main',
+    'Cython.Compiler.Code', 'Cython.Utils',
+    'setuptools.command.build_ext', 'distutils.command.build_ext',
+    'wheel', 'pkg_resources._vendor.packaging',
 ]
 
 # ==================== 6. Analysis ====================
