@@ -27,7 +27,6 @@ hiddenimports = [
     'cv2',
     
     # Scipy 内部模块（修正名称）
-    'scipy._cyutility_cxx',
     'scipy.special._ufuncs',
     'scipy.linalg.cython_blas',
     'scipy.linalg.cython_lapack',
@@ -54,7 +53,7 @@ hiddenimports = list(set(hiddenimports))
 invalid_imports = [
     'paddleocr.tools', 'paddleocr.ppocr', 'paddleocr.ppstructure',
     'paddle.utils._cpp_infer', 'scipy._cyutility', 'importlib_resources.trees',
-    'torch.distributed._tensor.ops.math_ops',  # 这些大量 torch.distributed 错误可以忽略，但移除警告
+    'scipy._cyutility_cxx',   # 不存在，移除警告
 ]
 for inv in invalid_imports:
     if inv in hiddenimports:
@@ -75,7 +74,7 @@ datas += collect_data_files('paddlex')
 datas += collect_data_files('easyocr')
 datas += collect_data_files('cv2')
 datas += collect_data_files('torch')
-datas += collect_data_files('sklearn')          # 注意：使用导入名 'sklearn'，不是 'scikit-learn'
+datas += collect_data_files('sklearn')          # 注意：使用导入名 'sklearn'
 
 # --- 3. 元数据收集（修复 ftfy, addict 等缺失）---
 metadata_datas = []
@@ -118,11 +117,9 @@ try:
 except Exception as e:
     print(f"⚠️ 无法收集 Torch lib 目录: {e}")
 
-# --- 5. 排除项（减小体积，但必须保留 torch.distributed）---
+# --- 5. 排除项（⚠️ 关键修改：移除 unittest 和 test）---
 excludes = [
     'tkinter',
-    # 'test',          # ❌ 移除，torch.fx 可能间接依赖 unittest
-    # 'unittest',      # ❌ 移除，torch._dispatch.python 直接依赖 unittest
     'pytest',
     'setuptools',
     'pip',
