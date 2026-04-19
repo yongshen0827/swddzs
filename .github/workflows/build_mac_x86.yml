@@ -1,0 +1,102 @@
+name: 打包 macOS x86_64 应用
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-x86:
+    runs-on: macos-15-intel  # ✅ 正确的 Intel 运行器
+
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+
+    - name: 设置 Python (x86_64)
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.9'
+        architecture: 'x64'
+
+    - name: 安装依赖
+      run: |
+        python -m pip install --upgrade pip
+        pip install --only-binary=all paddlepaddle==3.0.0rc0 -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
+        pip install -r requirements_x86.txt   # ✅ 使用专用依赖文件
+
+    - name: 下载 OCR 模型 (带重试)
+      uses: nick-fields/retry@v2
+      with:
+        timeout_minutes: 10
+        max_attempts: 3
+        retry_on: error
+        command: |
+          export MKL_DEBUG_CPU_TYPE=5
+          export MKL_ENABLE_INSTRUCTIONS=SSE4_2
+          export OPENBLAS_NUM_THREADS=1
+          export OMP_NUM_THREADS=1
+          export KMP_DUPLICATE_LIB_OK=TRUE
+          python -c "
+          import paddleocr
+          import easyocr
+          paddleocr.PaddleOCR(lang='ch', ocr_version='PP-OCRv4', use_textline_orientation=True)
+          easyocr.Reader(['ch_sim', 'en'], gpu=False)
+          print('✅ 模型下载完成')
+          "
+
+    - name: 清理旧构建
+      run: rm -rf build dist *.spec.bak *.zip
+
+    - name: PyInstaller 打包 (使用 x86 spec)
+      run: |
+        export POCL_DEBUG=1
+        pyinstaller --clean --noconfirm build_mac_x86.spec
+
+    - name: 验证打包产物
+      run: |
+        if [ ! -d "dist/商委订单审核助手服务端.app" ]; then
+          echo "❌ .app 未生成"
+          exit 1
+        fi
+        echo "✅ .app 生成成功"
+
+    - name: 压缩 .app 为 zip
+      run: |
+        cd dist
+        zip -r ../OrderAuditApp-macOS-x86_64.zip "商委订单审核助手服务端.app"
+        cd ..
+
+    - name: 上传产物
+      uses: actions/upload-artifact@v4
+      with:
+        name: macOS-App-x86_64
+        path: OrderAuditApp-macOS-x86_64.zip
+
+    - name: 测试 x86_64 版本
+      run: |
+        unzip -q OrderAuditApp-macOS-x86_64.zip
+        APP_PATH="./商委订单审核助手服务端.app"
+        EXEC_PATH="$APP_PATH/Contents/MacOS/main"
+        chmod +x "$EXEC_PATH"
+        export MKL_DEBUG_CPU_TYPE=5
+        export MKL_ENABLE_INSTRUCTIONS=SSE4_2
+        export OPENBLAS_NUM_THREADS=1
+        export OMP_NUM_THREADS=1
+        export KMP_DUPLICATE_LIB_OK=TRUE
+        export FLAGS_use_mkldnn=0
+        export PADDLE_USE_MPS=0
+        export PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=1
+        "$EXEC_PATH" > server.log 2>&1 &
+        SERVER_PID=$!
+        sleep 5
+        for i in {1..60}; do
+          if curl -s -f http://127.0.0.1:5678/health > /dev/null 2>&1; then
+            echo "✅ x86_64 测试通过"
+            kill $SERVER_PID 2>/dev/null || true
+            exit 0
+          fi
+          sleep 2
+        done
+        echo "❌ x86_64 测试失败"
+        tail -50 server.log
+        kill $SERVER_PID 2>/dev/null || true
+        exit 1
