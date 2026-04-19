@@ -195,31 +195,23 @@ async def startup_event():
 
 
 # =============================================================================
-# 初始化 OCR 引擎（macOS 兼容版本）
-# =============================================================================
+# 初始化 OCR 引擎
 try:
-    # macOS 上尝试使用兼容参数
     if sys.platform == 'darwin':
-        # macOS ARM64 版本不支持 use_textline_orientation
         try:
-            paddle_ocr = PaddleOCR(use_angle_cls=True, lang='ch', show_log=False)
+            # 1. 使用推荐的 OCR 版本
+            paddle_ocr = PaddleOCR(lang='ch', ocr_version='PP-OCRv4', show_log=False)
         except:
-            paddle_ocr = PaddleOCR(use_angle_cls=True, lang='ch')
+            paddle_ocr = PaddleOCR(lang='ch')
     else:
+        # 2. 弃用 use_textline_orientation 参数
         try:
-            paddle_ocr = PaddleOCR(use_textline_orientation=True, lang='ch', show_log=False)
+            paddle_ocr = PaddleOCR(lang='ch', ocr_version='PP-OCRv4', show_log=False)
         except TypeError:
-            paddle_ocr = PaddleOCR(use_angle_cls=True, lang='ch', show_log=False)
+            paddle_ocr = PaddleOCR(lang='ch', show_log=False)
 except Exception as e:
     print(f"⚠️ PaddleOCR 初始化失败: {e}")
-    # 降级使用 EasyOCR
     paddle_ocr = None
-
-try:
-    easy_reader = easyocr.Reader(['ch_sim', 'en'], gpu=False)  # macOS 上禁用 GPU
-except Exception as e:
-    print(f"⚠️ EasyOCR 初始化失败: {e}")
-    easy_reader = None
 
 
 # =============================================================================
