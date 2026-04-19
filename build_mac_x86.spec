@@ -8,7 +8,7 @@ from PyInstaller.utils.hooks import (
 
 block_cipher = None
 
-# --- 1. 隐藏导入（精简版，自动收集为主）---
+# --- 1. 隐藏导入 ---
 hiddenimports = [
     # Paddle & PaddleOCR 核心
     'paddle', 'paddleocr', 'paddlex',
@@ -16,7 +16,7 @@ hiddenimports = [
     'paddleocr._pipelines', 'paddleocr._pipelines.ocr',
     'paddlex.inference', 'paddlex.inference.pipelines',
     
-    # PyTorch 核心（确保 torch.cuda 存在）
+    # PyTorch 核心
     'torch', 'torch.cuda',
     'torchvision', 'torchaudio',
     
@@ -26,7 +26,7 @@ hiddenimports = [
     # OpenCV
     'cv2',
     
-    # Scipy 内部模块（修正名称）
+    # Scipy 内部模块
     'scipy.special._ufuncs',
     'scipy.linalg.cython_blas',
     'scipy.linalg.cython_lapack',
@@ -36,23 +36,26 @@ hiddenimports = [
     'uvicorn', 'fastapi', 'pydantic', 'fitz', 'pdfplumber',
     'pkg_resources', 'pkg_resources._vendor', 'pkg_resources.extern',
     
-    # modelscope 必要模块
+    # modelscope
     'modelscope', 'addict',
     
-    # jaraco 相关模块（解决 x86_64 环境 pkg_resources 缺失问题）
+    # jaraco 相关（解决 pkg_resources 依赖）
     'jaraco', 'jaraco.text',
 ]
 
-# 自动收集子模块（覆盖大部分依赖）
+# 自动收集子模块
 hiddenimports += collect_submodules('paddleocr')
 hiddenimports += collect_submodules('paddle')
 hiddenimports += collect_submodules('paddlex')
 hiddenimports += collect_submodules('torch')
 hiddenimports += collect_submodules('modelscope')
 hiddenimports += collect_submodules('sklearn')
+# 🔥 关键：强制收集 jaraco 所有子模块
+hiddenimports += collect_submodules('jaraco')
+hiddenimports += collect_submodules('jaraco.text')
 hiddenimports = list(set(hiddenimports))
 
-# 移除明确不存在的模块（减少错误日志）
+# 移除明确不存在的模块
 invalid_imports = [
     'paddleocr.tools', 'paddleocr.ppocr', 'paddleocr.ppstructure',
     'paddle.utils._cpp_infer', 'scipy._cyutility', 'importlib_resources.trees',
@@ -79,7 +82,14 @@ datas += collect_data_files('cv2')
 datas += collect_data_files('torch')
 datas += collect_data_files('sklearn')
 
-# --- 3. 元数据收集（修复 ftfy, addict, jaraco 等缺失）---
+# 🔥 额外收集 jaraco 的数据文件
+try:
+    datas += collect_data_files('jaraco')
+    datas += collect_data_files('jaraco.text')
+except:
+    pass
+
+# --- 3. 元数据收集 ---
 metadata_datas = []
 for pkg in ['paddlex', 'ftfy', 'imagesize', 'lxml', 'opencv-contrib-python',
             'openpyxl', 'pyclipper', 'modelscope', 'addict', 'torch', 'torchvision', 'torchaudio',
@@ -102,7 +112,7 @@ binaries += collect_dynamic_libs('scipy')
 binaries += collect_dynamic_libs('PIL')
 binaries += collect_dynamic_libs('sklearn')
 
-# 手动将 Paddle libs 目录打包到正确位置
+# 手动收集 Paddle libs
 try:
     import paddle
     paddle_libs_dir = os.path.join(os.path.dirname(paddle.__file__), 'libs')
@@ -112,6 +122,7 @@ try:
 except Exception as e:
     print(f"⚠️ 无法收集 Paddle libs 目录: {e}")
 
+# 手动收集 Torch lib
 try:
     import torch
     torch_lib_dir = os.path.join(os.path.dirname(torch.__file__), 'lib')
@@ -121,7 +132,7 @@ try:
 except Exception as e:
     print(f"⚠️ 无法收集 Torch lib 目录: {e}")
 
-# --- 5. 排除项（⚠️ 关键：保留 unittest 等）---
+# --- 5. 排除项 ---
 excludes = [
     'tkinter',
     'pytest',
