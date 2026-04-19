@@ -5,7 +5,7 @@ on:
 
 jobs:
   build-x86:
-    runs-on: macos-15-intel
+    runs-on: macos-13
 
     steps:
     - name: 检出代码
@@ -46,7 +46,7 @@ jobs:
     - name: 清理旧构建
       run: rm -rf build dist *.spec.bak *.zip
 
-    - name: PyInstaller 打包
+    - name: PyInstaller 打包 (使用 x86 spec)
       run: |
         export POCL_DEBUG=1
         pyinstaller --clean --noconfirm build_mac_x86.spec
