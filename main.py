@@ -1,33 +1,32 @@
 import sys
 import os
 
-if getattr(sys, 'frozen', False):
-    # PyInstaller 打包后的资源根目录
+if getattr(sys, 'frozen', False):  # PyInstaller 打包后的资源根目录
     base_path = sys._MEIPASS if hasattr(sys, '_MEIPASS') else os.path.dirname(sys.executable)
-
+    
     # ---------- 核心修复：纠正 sys.prefix / sys.exec_prefix ----------
     # Paddle 内部会使用这些路径构建库搜索路径，必须设为有效值
     sys.prefix = base_path
     sys.exec_prefix = base_path
-
+    
     # ----- macOS 动态库搜索路径 -----
     if sys.platform == 'darwin':
         lib_dir = os.path.dirname(sys.executable)
         current = os.environ.get('DYLD_FALLBACK_LIBRARY_PATH', '')
         os.environ['DYLD_FALLBACK_LIBRARY_PATH'] = lib_dir + (os.pathsep + current if current else '')
         print(f"📚 动态库基础路径: {lib_dir}")
-
+    
     # ----- 模型路径设置 -----
     paddleocr_home = os.path.join(base_path, '.paddleocr')
     if os.path.exists(paddleocr_home):
         os.environ['PADDLEOCR_HOME'] = paddleocr_home
         print(f"PaddleOCR 模型路径: {paddleocr_home}")
-
+    
     easyocr_home = os.path.join(base_path, '.EasyOCR')
     if os.path.exists(easyocr_home):
         os.environ['EASYOCR_MODULE_PATH'] = easyocr_home
         print(f"EasyOCR 模型路径: {easyocr_home}")
-
+    
     # ---------- 修复 site.USER_SITE 为 None ----------
     import site
     if site.USER_SITE is None:
@@ -35,7 +34,7 @@ if getattr(sys, 'frozen', False):
         os.makedirs(temp_user_site, exist_ok=True)
         site.USER_SITE = temp_user_site
         print(f"📦 临时 USER_SITE: {temp_user_site}")
-
+    
     # ---------- Paddle 动态库路径显式注入 ----------
     try:
         import paddle
@@ -51,6 +50,44 @@ if getattr(sys, 'frozen', False):
             print(f"⚠️ Paddle libs 目录不存在: {paddle_libs_dir}")
     except Exception as e:
         print(f"⚠️ 无法设置 Paddle 动态库路径: {e}")
+    
+    # ✅ 新增：ARM64 原生打包专用修复 (Paddle 动态库路径注入)
+    # 必须在设置完基础环境变量后执行
+    if sys.platform == "darwin":
+        try:
+            # 获取打包后的资源目录
+            bundle_dir = sys._MEIPASS
+            
+            # 构建 Paddle libs 的路径 (注意：PyInstaller 通常会将包解压到 _internal 下)
+            paddle_libs_candidates = [
+                os.path.join(bundle_dir, '_internal', 'paddle', 'libs'),
+                os.path.join(bundle_dir, 'paddle', 'libs'), # 备选路径
+            ]
+            
+            paddle_libs_path = None
+            for candidate in paddle_libs_candidates:
+                if os.path.exists(candidate):
+                    paddle_libs_path = candidate
+                    break
+            
+            if paddle_libs_path:
+                # --- 关键修复：确保动态库能被找到 ---
+                # 1. 修复 DYLD_LIBRARY_PATH (Paddle 有时依赖这个)
+                current_dyl = os.environ.get('DYLD_LIBRARY_PATH', '')
+                os.environ['DYLD_LIBRARY_PATH'] = paddle_libs_path + os.pathsep + current_dyl
+                
+                # 2. 修复 DYLD_FALLBACK_LIBRARY_PATH (你原有代码使用了这个，我们追加)
+                current_fallback = os.environ.get('DYLD_FALLBACK_LIBRARY_PATH', '')
+                os.environ['DYLD_FALLBACK_LIBRARY_PATH'] = (
+                    paddle_libs_path + os.pathsep + current_fallback
+                )
+                
+                print(f"🔧 [ARM64修复] Paddle 动态库路径已注入: {paddle_libs_path}")
+            else:
+                print(f"⚠️ [ARM64修复] 未找到 Paddle libs 目录。搜索路径: {paddle_libs_candidates}")
+                
+        except Exception as e:
+            print(f"❌ [ARM64修复] 动态库路径设置失败: {e}")
 
     # ---------- 环境变量加固（防止 Illegal instruction）----------
     # 这些变量在测试工作流中已设置，但这里再设一次可增加健壮性
@@ -64,15 +101,14 @@ if getattr(sys, 'frozen', False):
 else:
     os.environ['PADDLEOCR_HOME'] = os.path.expanduser('~/.paddleocr')
     os.environ['EASYOCR_MODULE_PATH'] = os.path.expanduser('~/.EasyOCR')
-
-# macOS 特定配置
-if sys.platform == 'darwin':
-    os.environ['FLAGS_use_mkldnn'] = '0'
-    os.environ['PADDLE_USE_MPS'] = '0'   # x86_64 模式下不启用 MPS
-else:
-    os.environ['FLAGS_use_mkldnn'] = '0'
-
-os.environ['PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK'] = '1'
+    
+    # macOS 特定配置
+    if sys.platform == 'darwin':
+        os.environ['FLAGS_use_mkldnn'] = '0'
+        os.environ['PADDLE_USE_MPS'] = '0' # x86_64 模式下不启用 MPS
+    else:
+        os.environ['FLAGS_use_mkldnn'] = '0'
+        os.environ['PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK'] = '1'
 
 import re
 import requests
