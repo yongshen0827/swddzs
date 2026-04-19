@@ -75,13 +75,13 @@ jobs:
         name: macOS-App
         path: OrderAuditApp-macOS.zip
 
- test:
+  test:                     # ← 前面两个空格，与 build 对齐
     name: 🧪 测试 (${{ matrix.os }})
     needs: build
     strategy:
-      fail-fast: false   # 关键：一个失败不影响另一个
+      fail-fast: false
       matrix:
-        os: [macos-15-intel, macos-14-arm64]  # 明确指定 ARM64 架构
+        os: [macos-15-intel, macos-14-arm64]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
