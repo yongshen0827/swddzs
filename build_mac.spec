@@ -3,7 +3,7 @@
 import os
 import sys
 import platform
-from PyInstaller.utils.hooks import collect_submodules, collect_data_files, collect_dynamic_libs
+from PyInstaller.utils.hooks import collect_submodules, collect_data_files, collect_dynamic_libs, copy_metadata
 
 block_cipher = None
 
@@ -45,6 +45,15 @@ datas += collect_data_files('easyocr')
 datas += collect_data_files('cv2')
 datas += collect_data_files('torch')
 datas += collect_data_files('sklearn')
+
+# --- 新增：收集必要的元数据 (解决 PaddleX 依赖检查失败) ---
+metadata_datas = []
+for pkg in ['paddlex', 'ftfy', 'imagesize', 'lxml', 'opencv-contrib-python', 'openpyxl', 'pyclipper']:
+    try:
+        metadata_datas += copy_metadata(pkg)
+    except Exception:
+        print(f"警告: 无法复制 {pkg} 的元数据")
+datas += metadata_datas
 
 # --- 3. 二进制动态库 (核心: 解决 "Illegal instruction") ---
 binaries = []
@@ -108,7 +117,7 @@ exe = EXE(
     console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
-    target_arch='arm64',
+    target_arch=None,            # 改为 None，避免与命令行参数冲突
     codesign_identity=None,
     entitlements_file=None,
 )
@@ -140,13 +149,3 @@ app = BUNDLE(
         'DTPlatformName': 'macosx',
     },
 )
-
-# 增加隐式导入
-hiddenimports = [
-    # ... (原有模块) ...
-    'paddle.base.libpaddle',
-    'paddle.utils.cpp_extension.loader',
-    'scipy.linalg.cython_blas',
-    'scipy.linalg.cython_lapack',
-    'scipy.sparse._csparsetools',
-]
