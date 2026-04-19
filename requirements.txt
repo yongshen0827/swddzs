@@ -46,7 +46,8 @@ psutil==7.2.2
 certifi==2026.1.4
 idna==3.11
 charset-normalizer==3.4.4
-ftfy==6.3.1                     # 新增：PaddleOCR 文本修复依赖
+ftfy==6.3.1
+addict==2.4.0                    # 新增：modelscope 依赖
 
 # ==================== 打包工具 ====================
 pyinstaller>=6.14.1
