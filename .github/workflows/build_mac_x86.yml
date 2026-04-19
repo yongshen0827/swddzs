@@ -5,7 +5,7 @@ on:
 
 jobs:
   build-x86:
-    runs-on: macos-15-intel  # ✅ 正确的 Intel 运行器
+    runs-on: macos-15-intel
 
     steps:
     - name: 检出代码
@@ -21,7 +21,7 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install --only-binary=all paddlepaddle==3.0.0rc0 -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
-        pip install -r requirements_x86.txt   # ✅ 使用专用依赖文件
+        pip install -r requirements_x86.txt
 
     - name: 下载 OCR 模型 (带重试)
       uses: nick-fields/retry@v2
@@ -71,7 +71,7 @@ jobs:
         name: macOS-App-x86_64
         path: OrderAuditApp-macOS-x86_64.zip
 
-    - name: 测试 x86_64 版本
+    - name: 测试 x86_64 版本 (增强版)
       run: |
         unzip -q OrderAuditApp-macOS-x86_64.zip
         APP_PATH="./商委订单审核助手服务端.app"
@@ -87,16 +87,48 @@ jobs:
         export PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=1
         "$EXEC_PATH" > server.log 2>&1 &
         SERVER_PID=$!
+        echo "📌 服务进程 PID: $SERVER_PID"
         sleep 5
+        
+        # 健康检查循环
         for i in {1..60}; do
           if curl -s -f http://127.0.0.1:5678/health > /dev/null 2>&1; then
-            echo "✅ x86_64 测试通过"
+            echo "✅ 服务启动成功 (健康检查通过，耗时约 $((i*2)) 秒)"
+            
+            # ---------- 新增：核心功能冒烟测试 ----------
+            echo "🧪 正在执行核心功能冒烟测试 (调用 /verify 接口)..."
+            curl -s -X POST http://127.0.0.1:5678/verify \
+              -H "Content-Type: application/json" \
+              -d '{
+                "invoiceUrl": "",
+                "merchantOrderNo": "test",
+                "platformOrderNo": "test",
+                "sellerName": "test",
+                "amount": "0",
+                "receiverAddress": "test",
+                "productBarcode": "test"
+              }' > /dev/null
+            
+            CURL_EXIT_CODE=$?
+            if [ $CURL_EXIT_CODE -eq 0 ]; then
+              echo "✅ 核心功能测试通过 (OCR 引擎已就绪)"
+            else
+              echo "❌ 核心功能测试失败 (curl 退出码: $CURL_EXIT_CODE)"
+              echo "    最后 50 行日志:"
+              tail -50 server.log
+              kill $SERVER_PID 2>/dev/null || true
+              exit 1
+            fi
+            # ---------------------------------------
+            
             kill $SERVER_PID 2>/dev/null || true
             exit 0
           fi
           sleep 2
         done
-        echo "❌ x86_64 测试失败"
+        
+        echo "❌ 服务启动超时或健康检查失败"
+        echo "    最后 50 行日志:"
         tail -50 server.log
         kill $SERVER_PID 2>/dev/null || true
         exit 1
