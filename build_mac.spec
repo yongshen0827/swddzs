@@ -2,6 +2,7 @@
 
 import os
 import sys
+import platform
 from PyInstaller.utils.hooks import collect_submodules, collect_data_files, collect_dynamic_libs
 
 block_cipher = None
@@ -107,7 +108,7 @@ exe = EXE(
     console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
-    target_arch='x86_64',
+    target_arch='arm64',
     codesign_identity=None,
     entitlements_file=None,
 )
@@ -135,6 +136,17 @@ app = BUNDLE(
         'LSMinimumSystemVersion': '11.0',
         'CFBundleShortVersionString': '1.0.0',
         'CFBundleVersion': '1.0.0',
-        'NSAppleEventsUsageDescription': 'This app needs to control other applications to automate OCR tasks.',
+        'CFBundleSupportedPlatforms': ['MacOSX'],
+        'DTPlatformName': 'macosx',
     },
 )
+
+# 增加隐式导入
+hiddenimports = [
+    # ... (原有模块) ...
+    'paddle.base.libpaddle',
+    'paddle.utils.cpp_extension.loader',
+    'scipy.linalg.cython_blas',
+    'scipy.linalg.cython_lapack',
+    'scipy.sparse._csparsetools',
+]
