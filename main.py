@@ -11,26 +11,26 @@ if getattr(sys, 'frozen', False):  # PyInstaller 打包后的资源根目录
     
     # ----- macOS 动态库搜索路径 (必须在导入 Paddle 前设置) -----
     if sys.platform == 'darwin':
-        lib_dir = os.path.dirname(sys.executable)
-        current = os.environ.get('DYLD_FALLBACK_LIBRARY_PATH', '')
-        os.environ['DYLD_FALLBACK_LIBRARY_PATH'] = lib_dir + (os.pathsep + current if current else '')
-        print(f"📚 动态库基础路径: {lib_dir}")
-
-        # 显式查找并注入 Paddle 动态库路径
-        paddle_libs_candidates = [
+        # 可执行文件所在目录（.app/Contents/MacOS）
+        exe_dir = os.path.dirname(sys.executable)
+        
+        # 候选动态库路径（优先使用打包后的相对目录）
+        lib_candidates = [
+            os.path.join(exe_dir, 'paddle', 'libs'),
             os.path.join(base_path, '_internal', 'paddle', 'libs'),
             os.path.join(base_path, 'paddle', 'libs'),
         ]
-        paddle_libs_path = None
-        for candidate in paddle_libs_candidates:
-            if os.path.exists(candidate):
-                paddle_libs_path = candidate
+        for lib_path in lib_candidates:
+            if os.path.exists(lib_path):
+                # 注入环境变量
+                current_dyld = os.environ.get('DYLD_LIBRARY_PATH', '')
+                os.environ['DYLD_LIBRARY_PATH'] = lib_path + os.pathsep + current_dyld
+                current_fallback = os.environ.get('DYLD_FALLBACK_LIBRARY_PATH', '')
+                os.environ['DYLD_FALLBACK_LIBRARY_PATH'] = lib_path + os.pathsep + current_fallback
+                print(f"🔧 动态库路径已注入: {lib_path}")
                 break
-        if paddle_libs_path:
-            dyld = os.environ.get('DYLD_FALLBACK_LIBRARY_PATH', '')
-            os.environ['DYLD_FALLBACK_LIBRARY_PATH'] = paddle_libs_path + os.pathsep + dyld
-            os.environ['DYLD_LIBRARY_PATH'] = paddle_libs_path + os.pathsep + os.environ.get('DYLD_LIBRARY_PATH', '')
-            print(f"🔧 Paddle 动态库路径已注入: {paddle_libs_path}")
+        else:
+            print("⚠️ 未找到 Paddle 动态库目录，将依赖系统路径")
     
     # ----- 模型路径设置 -----
     paddleocr_home = os.path.join(base_path, '.paddleocr')
@@ -56,6 +56,9 @@ if getattr(sys, 'frozen', False):  # PyInstaller 打包后的资源根目录
     os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
     os.environ.setdefault('OMP_NUM_THREADS', '1')
     os.environ.setdefault('KMP_DUPLICATE_LIB_OK', 'TRUE')
+    os.environ.setdefault('FLAGS_use_mkldnn', '0')
+    os.environ.setdefault('PADDLE_USE_MPS', '0')
+    os.environ.setdefault('PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK', '1')
     print("🛡️ 兼容性环境变量已就绪")
 
 else:
@@ -65,7 +68,7 @@ else:
     # macOS 特定配置
     if sys.platform == 'darwin':
         os.environ['FLAGS_use_mkldnn'] = '0'
-        os.environ['PADDLE_USE_MPS'] = '0'  # x86_64 模式下不启用 MPS
+        os.environ['PADDLE_USE_MPS'] = '0'  # ARM64 模式下不启用 MPS
     else:
         os.environ['FLAGS_use_mkldnn'] = '0'
         os.environ['PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK'] = '1'
