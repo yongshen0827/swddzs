@@ -31,7 +31,8 @@ jobs:
           python -c "
           from paddleocr import PaddleOCR
           import easyocr
-          PaddleOCR(use_angle_cls=True, lang='ch', show_log=False)
+          # 使用 3.x 风格初始化，移除已弃用和无效参数
+          PaddleOCR(lang='ch', ocr_version='PP-OCRv4', use_textline_orientation=True)
           easyocr.Reader(['ch_sim', 'en'], gpu=False)
           print('✅ 模型下载完成')
           "
