@@ -120,9 +120,16 @@ except Exception as e:
 
 # --- 5. 排除项（减小体积，但必须保留 torch.distributed）---
 excludes = [
-    'tkinter', 'test', 'unittest', 'pytest', 'setuptools', 'pip',
-    'IPython', 'jupyter', 'notebook', 'matplotlib.tests',
-    # 注意：不要排除 torch.distributed，否则会导致崩溃
+    'tkinter',
+    # 'test',          # ❌ 移除，torch.fx 可能间接依赖 unittest
+    # 'unittest',      # ❌ 移除，torch._dispatch.python 直接依赖 unittest
+    'pytest',
+    'setuptools',
+    'pip',
+    'IPython',
+    'jupyter',
+    'notebook',
+    'matplotlib.tests',
     'paddle.tensorrt',
     'paddlex.inference.serving',
 ]
