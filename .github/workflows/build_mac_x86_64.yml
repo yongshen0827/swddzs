@@ -29,11 +29,19 @@ jobs:
         max_attempts: 3
         retry_on: error
         command: |
+          # 设置关键环境变量
+          export MKL_DEBUG_CPU_TYPE=5
+          export MKL_ENABLE_INSTRUCTIONS=SSE4_2
+          export OPENBLAS_NUM_THREADS=1
+          export OMP_NUM_THREADS=1
+          export KMP_DUPLICATE_LIB_OK=TRUE
+          
+          # 执行模型下载
           python -c "
-          from paddleocr import PaddleOCR
+          import paddleocr
           import easyocr
-          # 使用 3.x 风格初始化，移除已弃用和无效参数
-          PaddleOCR(lang='ch', ocr_version='PP-OCRv4', use_textline_orientation=True)
+          # 使用 3.x 风格初始化
+          paddleocr.PaddleOCR(lang='ch', ocr_version='PP-OCRv4', use_textline_orientation=True)
           easyocr.Reader(['ch_sim', 'en'], gpu=False)
           print('✅ 模型下载完成')
           "
@@ -67,13 +75,13 @@ jobs:
         name: macOS-App
         path: OrderAuditApp-macOS.zip
 
-  test:
+ test:
     name: 🧪 测试 (${{ matrix.os }})
     needs: build
     strategy:
       fail-fast: false   # 关键：一个失败不影响另一个
       matrix:
-        os: [macos-15-intel, macos-14]
+        os: [macos-15-intel, macos-14-arm64]  # 明确指定 ARM64 架构
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
@@ -92,10 +100,12 @@ jobs:
         chmod +x "$EXEC_PATH"
         
         echo "===== 当前测试环境: ${{ matrix.os }} ====="
-        echo "===== 架构 ====="
+        echo "===== 架构详情 ====="
         file "$EXEC_PATH"
+        arch -arm64 echo "   正在使用 ARM64 架构运行测试"
         
-        echo "===== 环境变量 ====="
+        echo "===== 环境变量设置 ====="
+        # 基础性能优化
         export MKL_DEBUG_CPU_TYPE=5
         export MKL_ENABLE_INSTRUCTIONS=SSE4_2
         export OPENBLAS_NUM_THREADS=1
@@ -104,7 +114,29 @@ jobs:
         export PYTHONHASHSEED=0
         export KMP_DUPLICATE_LIB_OK=TRUE
         
-        echo "🚀 启动服务..."
+        # **ARM64 专用修复**：显式设置 Paddle 动态库路径
+        PADDLE_LIBS_PATH="$APP_PATH/Contents/MacOS/paddle/libs"
+        if [ -d "$PADDLE_LIBS_PATH" ]; then
+          export DYLD_LIBRARY_PATH="$PADDLE_LIBS_PATH:$DYLD_LIBRARY_PATH"
+          export DYLD_FALLBACK_LIBRARY_PATH="$PADDLE_LIBS_PATH:$DYLD_FALLBACK_LIBRARY_PATH"
+          echo "   ✅ Paddle 动态库路径已设置: $PADDLE_LIBS_PATH"
+        else
+          echo "   ❌ Paddle 动态库路径不存在: $PADDLE_LIBS_PATH"
+          ls -la "$APP_PATH/Contents/MacOS/paddle"
+          exit 1
+        fi
+        
+        echo "===== 调试信息 ====="
+        # **ARM64 专用调试**：检查 PyInstaller 资源路径
+        echo "   📂 PyInstaller 资源路径:"
+        python -c "import sys; print(f'      sys._MEIPASS: {getattr(sys, \"_MEIPASS\", None)}'); print(f'      sys.executable: {sys.executable}'); print(f'      sys.prefix: {sys.prefix}')"
+        
+        # **ARM64 专用调试**：验证 Paddle 初始化
+        echo "   🤖 验证 Paddle 初始化:"
+        python -c "import paddle; print(f'      Paddle 版本: {paddle.__version__}'); print(f'      Paddle libs 路径: {paddle.__file__}')"
+        
+        echo "===== 启动服务 ====="
+        echo "   🚀 启动服务..."
         "$EXEC_PATH" > server.log 2>&1 &
         SERVER_PID=$!
         echo "   PID: $SERVER_PID"
