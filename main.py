@@ -197,18 +197,10 @@ async def startup_event():
 # =============================================================================
 # 初始化 OCR 引擎
 try:
-    if sys.platform == 'darwin':
-        try:
-            # 1. 使用推荐的 OCR 版本
-            paddle_ocr = PaddleOCR(lang='ch', ocr_version='PP-OCRv4', show_log=False)
-        except:
-            paddle_ocr = PaddleOCR(lang='ch')
-    else:
-        # 2. 弃用 use_textline_orientation 参数
-        try:
-            paddle_ocr = PaddleOCR(lang='ch', ocr_version='PP-OCRv4', show_log=False)
-        except TypeError:
-            paddle_ocr = PaddleOCR(lang='ch', show_log=False)
+    # 旧参数 'use_angle_cls' 已弃用，改用 'use_textline_orientation'
+    # 新版本默认值通常为 True，所以可以省略，但为了明确意图，建议显式写出。
+    # 日志控制通过 paddleocr.logger 统一管理。
+    paddle_ocr = PaddleOCR(lang='ch', ocr_version='PP-OCRv4', use_textline_orientation=True)
 except Exception as e:
     print(f"⚠️ PaddleOCR 初始化失败: {e}")
     paddle_ocr = None
@@ -350,16 +342,15 @@ def recognize_image_np(img: np.ndarray) -> str:
     if paddle_ocr is None:
         return ""
     try:
-        # 注意：PaddleOCR 的 ocr 方法支持直接传入 numpy 数组，需要设置 cls=True 启用方向分类
-        result = paddle_ocr.ocr(img, cls=True)
+        # 3.x 推荐使用 predict 方法
+        result = paddle_ocr.predict(img)
         texts = []
-        if result and len(result) > 0 and result[0]:
-            for line in result[0]:
-                if line and len(line) >= 2:
-                    text = line[1][0] if isinstance(line[1], tuple) else line[1]
-                    confidence = line[1][1] if isinstance(line[1], tuple) and len(line[1]) > 1 else 1.0
-                    if confidence > 0.3:
-                        texts.append(text)
+        # 3.x predict 返回一个 OCRResult 对象列表，通常取第一个元素
+        if result and len(result) > 0 and hasattr(result[0], 'json'):
+            res_json = result[0].json['res']
+            for text, score in zip(res_json['rec_texts'], res_json['rec_scores']):
+                if score > 0.3:
+                    texts.append(text)
         return "\n".join(texts)
     except Exception as e:
         print(f"内存 OCR 失败: {e}")
