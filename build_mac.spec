@@ -2,59 +2,65 @@
 
 import os
 import sys
-import platform
-from PyInstaller.utils.hooks import collect_submodules, collect_data_files, collect_dynamic_libs, copy_metadata
+from PyInstaller.utils.hooks import (
+    collect_submodules, collect_data_files, collect_dynamic_libs, copy_metadata
+)
 
 block_cipher = None
 
-# --- 1. 动态库与隐藏导入配置 (适配 PaddleOCR 3.x + PyTorch) ---
+# --- 1. 隐藏导入（精简版，自动收集为主）---
 hiddenimports = [
-    # Paddle 和 PaddleOCR 核心模块 (3.x)
+    # Paddle & PaddleOCR 核心
     'paddle', 'paddleocr', 'paddlex',
     'paddle.fluid', 'paddle.base', 'paddle.dataset',
-    
-    # PaddleOCR 3.x 内部实际模块（由 collect_submodules 自动收集，此处仅作安全兜底）
     'paddleocr._pipelines', 'paddleocr._pipelines.ocr',
     'paddlex.inference', 'paddlex.inference.pipelines',
     
-    # PyTorch 相关（修复 torch.cuda 缺失）
-    'torch', 'torch.cuda', 'torch.cuda.amp', 'torch.cuda.streams',
-    'torch.distributed', 'torch.distributed.rpc',
+    # PyTorch 核心（确保 torch.cuda 存在）
+    'torch', 'torch.cuda',
     'torchvision', 'torchaudio',
     
-    # 其他关键依赖
-    'easyocr', 'cv2', 'sklearn', 'skimage',
-    'scipy._cyutility_cxx',          # scipy 新版本内部模块名
+    # EasyOCR
+    'easyocr',
+    
+    # OpenCV
+    'cv2',
+    
+    # Scipy 内部模块（修正名称）
+    'scipy._cyutility_cxx',
     'scipy.special._ufuncs',
     'scipy.linalg.cython_blas',
     'scipy.linalg.cython_lapack',
     'scipy.sparse._csparsetools',
-    'uvicorn', 'fastapi', 'pydantic', 'fitz', 'pdfplumber',
     
-    # 处理 setuptools / pkg_resources 的潜在缺失
+    # FastAPI & 工具
+    'uvicorn', 'fastapi', 'pydantic', 'fitz', 'pdfplumber',
     'pkg_resources', 'pkg_resources._vendor', 'pkg_resources.extern',
     
-    # modelscope 依赖（PaddleX 间接依赖）
-    'modelscope', 'modelscope.utils', 'modelscope.utils.logger',
-    'modelscope.utils.torch_utils', 'modelscope.utils.import_utils',
-    'modelscope.utils.ast_utils', 'modelscope.utils.registry',
+    # modelscope 必要模块
+    'modelscope', 'addict',
 ]
 
-# 自动收集子模块，防止遗漏（会覆盖上述手动添加）
+# 自动收集子模块（覆盖大部分依赖）
 hiddenimports += collect_submodules('paddleocr')
 hiddenimports += collect_submodules('paddle')
 hiddenimports += collect_submodules('paddlex')
 hiddenimports += collect_submodules('torch')
 hiddenimports += collect_submodules('modelscope')
+hiddenimports += collect_submodules('sklearn')
 hiddenimports = list(set(hiddenimports))
 
-# 移除不存在的模块（避免警告）
-for invalid_mod in ['paddleocr.tools', 'paddleocr.ppocr', 'paddleocr.ppstructure', 
-                    'paddle.utils._cpp_infer', 'scipy._cyutility', 'importlib_resources.trees']:
-    if invalid_mod in hiddenimports:
-        hiddenimports.remove(invalid_mod)
+# 移除明确不存在的模块（减少错误日志）
+invalid_imports = [
+    'paddleocr.tools', 'paddleocr.ppocr', 'paddleocr.ppstructure',
+    'paddle.utils._cpp_infer', 'scipy._cyutility', 'importlib_resources.trees',
+    'torch.distributed._tensor.ops.math_ops',  # 这些大量 torch.distributed 错误可以忽略，但移除警告
+]
+for inv in invalid_imports:
+    if inv in hiddenimports:
+        hiddenimports.remove(inv)
 
-# --- 2. 数据文件 (模型) ---
+# --- 2. 数据文件 ---
 datas = []
 home = os.path.expanduser('~')
 paddle_model_dir = os.path.join(home, '.paddleocr')
@@ -64,27 +70,25 @@ easy_model_dir = os.path.join(home, '.EasyOCR')
 if os.path.exists(easy_model_dir):
     datas.append((easy_model_dir, '.EasyOCR'))
 
-# 收集库自带的数据文件
 datas += collect_data_files('paddleocr')
 datas += collect_data_files('paddlex')
 datas += collect_data_files('easyocr')
 datas += collect_data_files('cv2')
 datas += collect_data_files('torch')
-datas += collect_data_files('scikit-learn')   # sklearn 的正确包名
+datas += collect_data_files('sklearn')          # 注意：使用导入名 'sklearn'，不是 'scikit-learn'
 
-# --- 新增：收集必要的元数据（解决 PaddleX 依赖检查失败）---
+# --- 3. 元数据收集（修复 ftfy, addict 等缺失）---
 metadata_datas = []
-for pkg in ['paddlex', 'ftfy', 'imagesize', 'lxml', 'opencv-contrib-python', 
-            'openpyxl', 'pyclipper', 'modelscope', 'torch', 'torchvision', 'torchaudio']:
+for pkg in ['paddlex', 'ftfy', 'imagesize', 'lxml', 'opencv-contrib-python',
+            'openpyxl', 'pyclipper', 'modelscope', 'addict', 'torch', 'torchvision', 'torchaudio']:
     try:
         metadata_datas += copy_metadata(pkg)
     except Exception as e:
         print(f"警告: 无法复制 {pkg} 的元数据: {e}")
 datas += metadata_datas
 
-# --- 3. 二进制动态库 (核心: 解决 "Illegal instruction" 及路径问题) ---
+# --- 4. 二进制动态库 ---
 binaries = []
-# 显式收集 Paddle 和 Torch 的动态库，确保指令集兼容的版本被正确打包
 binaries += collect_dynamic_libs('paddle')
 binaries += collect_dynamic_libs('torch')
 binaries += collect_dynamic_libs('torchvision')
@@ -93,20 +97,18 @@ binaries += collect_dynamic_libs('cv2')
 binaries += collect_dynamic_libs('numpy')
 binaries += collect_dynamic_libs('scipy')
 binaries += collect_dynamic_libs('PIL')
-binaries += collect_dynamic_libs('scikit-learn')
+binaries += collect_dynamic_libs('sklearn')
 
-# 手动将 Paddle 的 libs 目录打包到 .app/Contents/MacOS/ 下（关键修复）
+# 手动将 Paddle libs 目录打包到正确位置
 try:
     import paddle
     paddle_libs_dir = os.path.join(os.path.dirname(paddle.__file__), 'libs')
     if os.path.exists(paddle_libs_dir):
-        # 将整个目录打包到可执行文件同级目录下的 paddle/libs
         binaries.append((paddle_libs_dir, 'paddle/libs'))
         print(f"✅ 已收集 Paddle libs 目录: {paddle_libs_dir} -> paddle/libs")
 except Exception as e:
     print(f"⚠️ 无法收集 Paddle libs 目录: {e}")
 
-# 同样处理 torch 的 lib 目录（如果存在）
 try:
     import torch
     torch_lib_dir = os.path.join(os.path.dirname(torch.__file__), 'lib')
@@ -116,16 +118,16 @@ try:
 except Exception as e:
     print(f"⚠️ 无法收集 Torch lib 目录: {e}")
 
-# --- 4. 排除项 (减小体积，但保留必要的子模块) ---
+# --- 5. 排除项（减小体积，但必须保留 torch.distributed）---
 excludes = [
     'tkinter', 'test', 'unittest', 'pytest', 'setuptools', 'pip',
     'IPython', 'jupyter', 'notebook', 'matplotlib.tests',
-    'torch.distributed',          # 分布式训练，无需打包
-    'paddle.tensorrt',            # TensorRT 依赖，macOS 无需
-    'paddlex.inference.serving',  # serving 插件，无需打包
+    # 注意：不要排除 torch.distributed，否则会导致崩溃
+    'paddle.tensorrt',
+    'paddlex.inference.serving',
 ]
 
-# --- 5. Analysis (主分析) ---
+# --- 6. Analysis ---
 a = Analysis(
     ['main.py'],
     pathex=[],
@@ -144,7 +146,7 @@ a = Analysis(
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
-# --- 6. EXE (可执行文件) ---
+# --- 7. EXE ---
 exe = EXE(
     pyz,
     a.scripts,
@@ -160,12 +162,12 @@ exe = EXE(
     console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
-    target_arch=None,            # 避免与命令行参数冲突
+    target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
 )
 
-# --- 7. COLLECT (收集文件夹) ---
+# --- 8. COLLECT ---
 coll = COLLECT(
     exe,
     a.binaries,
@@ -177,7 +179,7 @@ coll = COLLECT(
     name='OrderAuditApp',
 )
 
-# --- 8. BUNDLE (生成 .app) ---
+# --- 9. BUNDLE ---
 app = BUNDLE(
     coll,
     name='商委订单审核助手服务端.app',
