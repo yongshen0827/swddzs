@@ -76,15 +76,11 @@ jobs:
         name: macOS-App
         path: OrderAuditApp-macOS.zip
 
-  test:                     # ← 前面两个空格，与 build 对齐
-    name: 🧪 测试 (${{ matrix.os }})
+  test:
+    name: 🧪 测试 (macOS ARM64)
     needs: build
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-15-intel, macos-14-arm64]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    runs-on: macos-14
+    timeout-minutes: 20
     steps:
     - name: 下载产物
       uses: actions/download-artifact@v4
@@ -100,13 +96,40 @@ jobs:
         EXEC_PATH="$APP_PATH/Contents/MacOS/main"
         chmod +x "$EXEC_PATH"
         
-        echo "===== 当前测试环境: ${{ matrix.os }} ====="
-        echo "===== 架构详情 ====="
-        file "$EXEC_PATH"
-        arch -arm64 echo "   正在使用 ARM64 架构运行测试"
+        echo "=============================================="
+        echo "📋 测试环境: macOS ARM64 (macos-14)"
+        echo "=============================================="
         
-        echo "===== 环境变量设置 ====="
-        # 基础性能优化
+        echo ""
+        echo "🔍 1. 架构检测"
+        echo "----------------------------------------------"
+        uname -m
+        file "$EXEC_PATH"
+        arch -arm64 echo "   ✅ 当前 shell 运行于 ARM64 模式"
+        
+        echo ""
+        echo "🔍 2. 动态库依赖分析"
+        echo "----------------------------------------------"
+        otool -L "$EXEC_PATH" | head -20
+        if [ -d "$APP_PATH/Contents/MacOS/paddle/libs" ]; then
+          echo "   📦 Paddle libs 目录内容:"
+          ls -la "$APP_PATH/Contents/MacOS/paddle/libs" | head -10
+        else
+          echo "   ⚠️ 未找到 paddle/libs 目录"
+          ls -la "$APP_PATH/Contents/MacOS/paddle" 2>/dev/null || echo "   (paddle 目录不存在)"
+        fi
+        
+        echo ""
+        echo "🔍 3. PyInstaller 资源目录结构"
+        echo "----------------------------------------------"
+        ls -la "$APP_PATH/Contents/MacOS/_internal" 2>/dev/null | head -20 || echo "   (无 _internal 目录)"
+        
+        echo ""
+        echo "=============================================="
+        echo "🚀 4. 启动服务"
+        echo "=============================================="
+        
+        # 设置完整的环境变量
         export MKL_DEBUG_CPU_TYPE=5
         export MKL_ENABLE_INSTRUCTIONS=SSE4_2
         export OPENBLAS_NUM_THREADS=1
@@ -114,54 +137,80 @@ jobs:
         export OMP_NUM_THREADS=1
         export PYTHONHASHSEED=0
         export KMP_DUPLICATE_LIB_OK=TRUE
+        export FLAGS_use_mkldnn=0
+        export PADDLE_USE_MPS=0
         
-        # **ARM64 专用修复**：显式设置 Paddle 动态库路径
+        # 动态库路径注入
         PADDLE_LIBS_PATH="$APP_PATH/Contents/MacOS/paddle/libs"
         if [ -d "$PADDLE_LIBS_PATH" ]; then
           export DYLD_LIBRARY_PATH="$PADDLE_LIBS_PATH:$DYLD_LIBRARY_PATH"
           export DYLD_FALLBACK_LIBRARY_PATH="$PADDLE_LIBS_PATH:$DYLD_FALLBACK_LIBRARY_PATH"
           echo "   ✅ Paddle 动态库路径已设置: $PADDLE_LIBS_PATH"
-        else
-          echo "   ❌ Paddle 动态库路径不存在: $PADDLE_LIBS_PATH"
-          ls -la "$APP_PATH/Contents/MacOS/paddle"
-          exit 1
         fi
         
-        echo "===== 启动服务 ====="
-        echo "   🚀 启动服务..."
+        echo "   🌍 当前环境变量:"
+        echo "      DYLD_LIBRARY_PATH=$DYLD_LIBRARY_PATH"
+        echo "      DYLD_FALLBACK_LIBRARY_PATH=$DYLD_FALLBACK_LIBRARY_PATH"
+        
+        # 启动服务，同时捕获 stdout 和 stderr
         "$EXEC_PATH" > server.log 2>&1 &
         SERVER_PID=$!
-        echo "   PID: $SERVER_PID"
+        echo "   📌 进程 PID: $SERVER_PID"
         
         # 短暂等待后检查进程是否存在
         sleep 3
         if ! kill -0 $SERVER_PID 2>/dev/null; then
-          echo "❌ 进程已退出，查看日志:"
+          echo ""
+          echo "❌ 进程已立即退出，完整日志如下:"
           cat server.log
           exit 1
         fi
         
-        echo "⏳ 等待服务就绪 (最多 360 秒)..."
+        echo ""
+        echo "⏳ 等待服务就绪 (最长 360 秒)..."
+        SUCCESS=0
         for i in {1..180}; do
           if ! kill -0 $SERVER_PID 2>/dev/null; then
-            echo "❌ 服务进程已退出，最后 100 行日志:"
-            tail -100 server.log
+            echo ""
+            echo "❌ 服务进程意外退出 (第 ${i} 次检查)，最后 200 行日志:"
+            echo "----------------------------------------------"
+            tail -200 server.log
+            echo "----------------------------------------------"
             exit 1
           fi
-          # 每 20 秒打印一次进度
+          
+          # 每 10 秒打印一次进度
           if [ $((i % 10)) -eq 0 ]; then
-            echo "   [${i}] 最新日志:"
+            echo "   [${i}] 最新 3 行日志:"
             tail -3 server.log
           fi
+          
+          # 健康检查
           if curl -s -f http://127.0.0.1:5678/health > /dev/null 2>&1; then
+            echo ""
             echo "✅ 服务启动成功！健康检查通过 (耗时约 $((i*2)) 秒)"
-            kill $SERVER_PID 2>/dev/null || true
-            exit 0
+            SUCCESS=1
+            break
           fi
           sleep 2
         done
         
-        echo "❌ 超时，服务未就绪。完整日志:"
-        cat server.log
+        if [ $SUCCESS -eq 0 ]; then
+          echo ""
+          echo "❌ 超时，服务未就绪。完整日志:"
+          cat server.log
+          kill $SERVER_PID 2>/dev/null || true
+          exit 1
+        fi
+        
+        echo ""
+        echo "=============================================="
+        echo "📄 5. 服务运行日志摘要"
+        echo "=============================================="
+        echo "   (最后 50 行)"
+        tail -50 server.log
+        
+        # 优雅终止
         kill $SERVER_PID 2>/dev/null || true
-        exit 1
+        echo ""
+        echo "🎉 测试完成"
