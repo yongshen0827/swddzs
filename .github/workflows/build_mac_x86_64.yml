@@ -68,28 +68,27 @@ jobs:
     name: 🧪 测试 (${{ matrix.os }})
     needs: build
     strategy:
+      fail-fast: false   # 关键：一个失败不影响另一个
       matrix:
         os: [macos-15-intel, macos-14]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15  # 整个 job 超时
+    timeout-minutes: 15
     steps:
     - name: 下载产物
       uses: actions/download-artifact@v4
       with:
         name: macOS-App
 
-    - name: 诊断 CPU 特性
-      run: |
-        echo "===== 当前测试环境: ${{ matrix.os }} ====="
-        sysctl -n machdep.cpu.brand_string 2>/dev/null || echo "⚠️ 无法获取 CPU 品牌"
-
     - name: 解压并测试
       run: |
+        set +e   # 允许命令失败而不立即退出脚本
+        
         unzip -q OrderAuditApp-macOS.zip
         APP_PATH="./商委订单审核助手服务端.app"
         EXEC_PATH="$APP_PATH/Contents/MacOS/main"
         chmod +x "$EXEC_PATH"
         
+        echo "===== 当前测试环境: ${{ matrix.os }} ====="
         echo "===== 架构 ====="
         file "$EXEC_PATH"
         
@@ -97,34 +96,45 @@ jobs:
         export MKL_DEBUG_CPU_TYPE=5
         export MKL_ENABLE_INSTRUCTIONS=SSE4_2
         export OPENBLAS_NUM_THREADS=1
+        export GOTO_NUM_THREADS=1
         export OMP_NUM_THREADS=1
+        export PYTHONHASHSEED=0
         export KMP_DUPLICATE_LIB_OK=TRUE
         
         echo "🚀 启动服务..."
-        # 使用 timeout 命令防止僵死，360 秒足够
-        timeout 360 "$EXEC_PATH" > server.log 2>&1 &
+        "$EXEC_PATH" > server.log 2>&1 &
         SERVER_PID=$!
+        echo "   PID: $SERVER_PID"
+        
+        # 短暂等待后检查进程是否存在
+        sleep 3
+        if ! kill -0 $SERVER_PID 2>/dev/null; then
+          echo "❌ 进程已退出，查看日志:"
+          cat server.log
+          exit 1
+        fi
         
         echo "⏳ 等待服务就绪 (最多 360 秒)..."
         for i in {1..180}; do
           if ! kill -0 $SERVER_PID 2>/dev/null; then
-            wait $SERVER_PID
-            EXIT_CODE=$?
-            echo "❌ 服务进程退出，退出码: $EXIT_CODE"
-            echo "===== 服务日志 ====="
-            cat server.log
+            echo "❌ 服务进程已退出，最后 100 行日志:"
+            tail -100 server.log
             exit 1
           fi
+          # 每 20 秒打印一次进度
+          if [ $((i % 10)) -eq 0 ]; then
+            echo "   [${i}] 最新日志:"
+            tail -3 server.log
+          fi
           if curl -s -f http://127.0.0.1:5678/health > /dev/null 2>&1; then
-            echo "✅ 服务启动成功！"
-            kill $SERVER_PID
+            echo "✅ 服务启动成功！健康检查通过 (耗时约 $((i*2)) 秒)"
+            kill $SERVER_PID 2>/dev/null || true
             exit 0
           fi
           sleep 2
         done
         
-        echo "❌ 超时未就绪"
-        echo "===== 服务日志 ====="
+        echo "❌ 超时，服务未就绪。完整日志:"
         cat server.log
         kill $SERVER_PID 2>/dev/null || true
         exit 1
