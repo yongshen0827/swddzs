@@ -231,14 +231,30 @@ async def startup_event():
 
 
 # =============================================================================
-# 初始化 OCR 引擎
+# 初始化 OCR 引擎（ARM64 适配版）
 try:
-    # 旧参数 'use_angle_cls' 已弃用，改用 'use_textline_orientation'
-    # 新版本默认值通常为 True，所以可以省略，但为了明确意图，建议显式写出。
-    # 日志控制通过 paddleocr.logger 统一管理。
-    paddle_ocr = PaddleOCR(lang='ch', ocr_version='PP-OCRv4', use_textline_orientation=True)
+    if sys.platform == 'darwin':
+        paddle_ocr = PaddleOCR(
+            lang='ch',
+            ocr_version='PP-OCRv3',
+            show_log=False,
+            use_gpu=False,
+            det_db_thresh=0.3,
+            rec_char_dict_path='ppocr_keys_v1.txt'
+        )
+    else:
+        paddle_ocr = PaddleOCR(
+            lang='ch',
+            ocr_version='PP-OCRv4',
+            show_log=False
+        )
 except Exception as e:
-    print(f"⚠️ PaddleOCR 初始化失败: {e}")
+    if sys.platform == 'darwin' and 'illegal instruction' in str(e):
+        print("❌ ARM64 架构检测到非法指令：请确保使用 PaddlePaddle 2.6.x + PP-OCRv3 组合")
+    elif 'ocr_version' in str(e):
+        print("❌ 当前 PaddlePaddle 版本不支持 PP-OCRv4，请降级为 PP-OCRv3")
+    else:
+        print(f"⚠️ PaddleOCR 初始化失败: {e}")
     paddle_ocr = None
 
 
