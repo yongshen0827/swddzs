@@ -49,7 +49,7 @@ jobs:
     - name: PyInstaller 打包
       run: |
         export POCL_DEBUG=1
-        pyinstaller --clean --noconfirm build_mac.spec
+        pyinstaller --clean --noconfirm build_mac_x86.spec
 
     - name: 验证打包产物
       run: |
